@@ -5,6 +5,12 @@ import 'package:permission_handler/permission_handler.dart' as ph;
 
 import 'bluetooth/bluetooth_adapter_state.dart';
 import 'bluetooth/bluetooth_manager.dart';
+import 'bluetooth/connection_controller.dart';
+import 'bluetooth/last_device_store.dart';
+import 'bluetooth/scan_controller.dart';
+import 'core/connection_state.dart';
+import 'core/connection_type.dart';
+import 'core/printly_device.dart';
 import 'platform/printly_platform_interface.dart';
 
 /// Entry point for the `printly` SDK.
@@ -19,6 +25,39 @@ class Printly {
   static final Printly instance = Printly._();
 
   final BluetoothManager _bluetooth = BluetoothManager();
+  final ScanController _scan = ScanController();
+  final ConnectionController _connection = ConnectionController();
+
+  Future<LastDeviceStore>? _storeFuture;
+  LastDeviceStore? _cachedStore;
+  PrintlyDevice? _cachedLastDevice;
+  bool _autoReconnectEnabled = false;
+  StreamSubscription<PrintlyDevice?>? _activeDeviceSub;
+  StreamSubscription<BluetoothAdapterState>? _autoReconnectAdapterSub;
+
+  Future<LastDeviceStore> _openStore() async {
+    final LastDeviceStore store = await (_storeFuture ??=
+        LastDeviceStore.open());
+    if (_cachedStore == null) {
+      _cachedStore = store;
+      _cachedLastDevice = store.readDevice();
+      _autoReconnectEnabled = store.readAutoReconnect();
+      _bindActiveDeviceListener();
+    }
+    return store;
+  }
+
+  void _bindActiveDeviceListener() {
+    _activeDeviceSub ??= _connection.activeDeviceStream.listen((
+      PrintlyDevice? device,
+    ) async {
+      if (device == null) return;
+      _cachedLastDevice = device;
+      final LastDeviceStore? store = _cachedStore;
+      if (store == null) return;
+      await store.writeDevice(device);
+    });
+  }
 
   /// Returns the underlying native platform version string.
   ///
@@ -90,6 +129,143 @@ class Printly {
   /// or change granted permissions. Delegates to
   /// [ph.openAppSettings].
   Future<bool> openAppSettings() => ph.openAppSettings();
+
+  /// Starts a device scan across the requested transport [types]. Defaults to
+  /// scanning both Bluetooth Classic and BLE for [kDefaultScanTimeout]; the
+  /// scan auto-stops when the timeout elapses.
+  ///
+  /// Safe to call repeatedly — concurrent calls share a single native scan
+  /// and the same in-flight future, so duplicate button taps cannot start
+  /// parallel scans.
+  Future<void> startScan({
+    Duration timeout = kDefaultScanTimeout,
+    Set<ConnectionType> types = kDefaultScanTypes,
+  }) => _scan.startScan(timeout: timeout, types: types);
+
+  /// Stops any in-progress scan. A no-op when no scan is running.
+  Future<void> stopScan() => _scan.stopScan();
+
+  /// Broadcast stream of discovered devices, deduplicated by transport +
+  /// address and emitted as an immutable list on each change.
+  Stream<List<PrintlyDevice>> get devicesStream => _scan.devicesStream;
+
+  /// Broadcast stream signalling whether a scan is currently running.
+  Stream<bool> get isScanningStream => _scan.isScanningStream;
+
+  /// Synchronous snapshot of the currently known devices.
+  List<PrintlyDevice> get currentDevices => _scan.currentDevices;
+
+  /// Synchronous snapshot of [isScanningStream].
+  bool get isScanning => _scan.isScanning;
+
+  /// Clears the accumulated device list without stopping an active scan.
+  void clearDevices() => _scan.clearDevices();
+
+  /// Opens a link to [device]. Idempotent for duplicate taps and serialises
+  /// switching between two devices (disconnect current, then connect new).
+  Future<void> connect(
+    PrintlyDevice device, {
+    Duration timeout = kDefaultConnectTimeout,
+  }) => _connection.connect(device, timeout: timeout);
+
+  /// Closes the current link. When [device] is omitted, disconnects the
+  /// currently active device (if any).
+  Future<void> disconnect({PrintlyDevice? device}) =>
+      _connection.disconnect(device: device);
+
+  /// Per-device broadcast stream of [ConnectionState] transitions.
+  Stream<ConnectionState> connectionStateOf(PrintlyDevice device) =>
+      _connection.connectionStateOf(device);
+
+  /// Synchronous snapshot of the current [ConnectionState] for [device].
+  ConnectionState connectionStateSnapshotOf(PrintlyDevice device) =>
+      _connection.stateOf(device);
+
+  /// Broadcast stream of the currently-connected device (or `null`).
+  Stream<PrintlyDevice?> get activeDeviceStream =>
+      _connection.activeDeviceStream;
+
+  /// Synchronous snapshot of [activeDeviceStream].
+  PrintlyDevice? get activeDevice => _connection.activeDevice;
+
+  /// Most recent failure reason reported for [device], cleared on the next
+  /// successful connect.
+  String? lastFailureReasonOf(PrintlyDevice device) =>
+      _connection.lastFailureReasonOf(device);
+
+  /// Loads the last persisted device and auto-reconnect flag, caches them
+  /// in-memory, and returns the device (or `null`).
+  ///
+  /// Safe to call multiple times — subsequent calls are cheap and return
+  /// the cached value without hitting the storage backend.
+  Future<PrintlyDevice?> loadLastConnectedDevice() async {
+    await _openStore();
+    return _cachedLastDevice;
+  }
+
+  /// Synchronously returns the in-memory cached last-connected device.
+  /// Returns `null` until [loadLastConnectedDevice], [reconnectLastDevice],
+  /// [enableAutoReconnect], or a successful [connect] has populated the
+  /// cache.
+  PrintlyDevice? get lastConnectedDevice => _cachedLastDevice;
+
+  /// Clears the persisted last-connected device and any cached value.
+  Future<void> forgetLastConnectedDevice() async {
+    final LastDeviceStore store = await _openStore();
+    _cachedLastDevice = null;
+    await store.writeDevice(null);
+  }
+
+  /// Reconnects to the last persisted device. Returns `false` if no device
+  /// has ever been remembered.
+  Future<bool> reconnectLastDevice({
+    Duration timeout = kDefaultConnectTimeout,
+  }) async {
+    await _openStore();
+    final PrintlyDevice? device = _cachedLastDevice;
+    if (device == null) return false;
+    await _connection.connect(device, timeout: timeout);
+    return true;
+  }
+
+  /// Enables or disables opt-in auto-reconnect.
+  ///
+  /// When enabled, the SDK listens to the adapter state and retries the
+  /// persisted device once whenever the adapter transitions to
+  /// [BluetoothAdapterState.poweredOn]. When [persist] is true the flag is
+  /// stored in [SharedPreferences] and restored on the next app launch.
+  Future<void> enableAutoReconnect({
+    required bool enabled,
+    bool persist = true,
+  }) async {
+    final LastDeviceStore store = await _openStore();
+    _autoReconnectEnabled = enabled;
+    if (persist) {
+      await store.writeAutoReconnect(enabled: enabled);
+    }
+    if (enabled) {
+      _autoReconnectAdapterSub ??= _bluetooth.stream.listen(
+        _onAdapterStateChangedForReconnect,
+      );
+    } else {
+      await _autoReconnectAdapterSub?.cancel();
+      _autoReconnectAdapterSub = null;
+    }
+  }
+
+  /// Whether auto-reconnect is currently enabled. Reflects the persisted
+  /// value once [loadLastConnectedDevice] or [enableAutoReconnect] has been
+  /// called; otherwise defaults to `false`.
+  bool get isAutoReconnectEnabled => _autoReconnectEnabled;
+
+  void _onAdapterStateChangedForReconnect(BluetoothAdapterState state) {
+    if (!_autoReconnectEnabled) return;
+    if (state != BluetoothAdapterState.poweredOn) return;
+    final PrintlyDevice? device = _cachedLastDevice;
+    if (device == null) return;
+    if (_connection.stateOf(device) == ConnectionState.connected) return;
+    unawaited(_connection.connect(device).catchError((_) {}));
+  }
 
   static ph.PermissionStatus _aggregateStatus(
     Iterable<ph.PermissionStatus> statuses,

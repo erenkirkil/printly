@@ -4,6 +4,10 @@ description: "Demonstrates how to use the printly plugin."
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
+# CFBundleShortVersionString (build name) + CFBundleVersion (build number).
+# Required by Xcode/App Store; Flutter surfaces this as a warning on iOS build.
+version: 0.1.0+1
+
 environment:
   sdk: ^3.9.2
 

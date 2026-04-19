@@ -1,17 +1,14 @@
 package com.erenkirkil.printly
 
-import android.Manifest
 import android.app.Activity
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
-import androidx.core.content.ContextCompat
+import com.erenkirkil.printly.adapter.AdapterStateStreamHandler
+import com.erenkirkil.printly.connection.ConnectionCoordinator
+import com.erenkirkil.printly.connection.ConnectionEventsStreamHandler
+import com.erenkirkil.printly.scan.ScanResultsStreamHandler
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -22,41 +19,61 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 
 /**
- * Android implementation of the printly plugin.
+ * Android entry point for the printly plugin.
  *
- * Exposes two channels to the Dart side:
- *  - `printly` (MethodChannel): one-shot calls such as `getPlatformVersion`
- *    and `openBluetoothSettings`.
- *  - `printly/adapter_state` (EventChannel): broadcast stream of
- *    [BluetoothAdapter] state changes, re-emitted using the shared wire
- *    protocol documented in `BluetoothAdapterState.fromCode`.
+ * The plugin itself is intentionally thin: it wires Flutter channels to
+ * dedicated handlers and coordinators in the sibling packages — keeping
+ * each concern (adapter state, scan, connection) in its own file with a
+ * single responsibility instead of one monolithic god class.
  */
-class PrintlyPlugin :
-    FlutterPlugin,
-    ActivityAware,
-    MethodCallHandler,
-    EventChannel.StreamHandler {
+class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
 
     private lateinit var methodChannel: MethodChannel
     private lateinit var adapterStateChannel: EventChannel
+    private lateinit var scanResultsChannel: EventChannel
+    private lateinit var connectionEventsChannel: EventChannel
     private lateinit var appContext: Context
 
+    private lateinit var adapterStateHandler: AdapterStateStreamHandler
+    private lateinit var scanResultsHandler: ScanResultsStreamHandler
+    private lateinit var connectionEventsHandler: ConnectionEventsStreamHandler
+    private lateinit var connectionCoordinator: ConnectionCoordinator
+
     private var activity: Activity? = null
-    private var adapterStateSink: EventChannel.EventSink? = null
-    private var adapterStateReceiver: BroadcastReceiver? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
-        methodChannel = MethodChannel(binding.binaryMessenger, METHOD_CHANNEL)
-        methodChannel.setMethodCallHandler(this)
-        adapterStateChannel = EventChannel(binding.binaryMessenger, ADAPTER_STATE_CHANNEL)
-        adapterStateChannel.setStreamHandler(this)
+
+        adapterStateHandler = AdapterStateStreamHandler(appContext)
+        scanResultsHandler = ScanResultsStreamHandler(appContext)
+        connectionEventsHandler = ConnectionEventsStreamHandler()
+        connectionCoordinator = ConnectionCoordinator(appContext, connectionEventsHandler)
+
+        methodChannel = MethodChannel(binding.binaryMessenger, CHANNEL_METHOD).also {
+            it.setMethodCallHandler(this)
+        }
+        adapterStateChannel = EventChannel(binding.binaryMessenger, CHANNEL_ADAPTER_STATE).also {
+            it.setStreamHandler(adapterStateHandler)
+        }
+        scanResultsChannel = EventChannel(binding.binaryMessenger, CHANNEL_SCAN_RESULTS).also {
+            it.setStreamHandler(scanResultsHandler)
+        }
+        connectionEventsChannel = EventChannel(
+            binding.binaryMessenger,
+            CHANNEL_CONNECTION_EVENTS,
+        ).also { it.setStreamHandler(connectionEventsHandler) }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         methodChannel.setMethodCallHandler(null)
         adapterStateChannel.setStreamHandler(null)
-        detachAdapterStateReceiver()
+        scanResultsChannel.setStreamHandler(null)
+        connectionEventsChannel.setStreamHandler(null)
+
+        adapterStateHandler.detach()
+        scanResultsHandler.detach()
+        connectionEventsHandler.detach()
+        connectionCoordinator.detach()
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -77,31 +94,66 @@ class PrintlyPlugin :
 
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
-            "getPlatformVersion" ->
-                result.success("Android ${Build.VERSION.RELEASE}")
-            "openBluetoothSettings" ->
-                result.success(openBluetoothSettings())
+            "getPlatformVersion" -> result.success("Android ${Build.VERSION.RELEASE}")
+            "openBluetoothSettings" -> result.success(openBluetoothSettings())
+            "startScan" -> handleStartScan(call, result)
+            "stopScan" -> handleStopScan(result)
+            "connect" -> handleConnect(call, result)
+            "disconnect" -> handleDisconnect(call, result)
             else -> result.notImplemented()
         }
     }
 
-    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-        adapterStateSink = events ?: return
-        events.success(encodeAdapterState(currentAdapter()))
-        registerAdapterStateReceiver()
+    private fun handleStartScan(call: MethodCall, result: Result) {
+        try {
+            val types: List<Int> = call.argument<List<Any?>>("types")
+                ?.mapNotNull { (it as? Number)?.toInt() }
+                ?: emptyList()
+            scanResultsHandler.start(types)
+            result.success(null)
+        } catch (e: SecurityException) {
+            result.error("permission_denied", e.message, null)
+        } catch (e: Throwable) {
+            result.error("start_scan_failed", e.message, null)
+        }
     }
 
-    override fun onCancel(arguments: Any?) {
-        detachAdapterStateReceiver()
-        adapterStateSink = null
+    private fun handleStopScan(result: Result) {
+        try {
+            scanResultsHandler.stop()
+            result.success(null)
+        } catch (e: Throwable) {
+            result.error("stop_scan_failed", e.message, null)
+        }
+    }
+
+    private fun handleConnect(call: MethodCall, result: Result) {
+        try {
+            val device: Map<String, Any?> = call.argument<Map<String, Any?>>("device")
+                ?: return result.error("invalid_args", "device missing", null)
+            val timeoutMs: Long? = (call.argument<Any?>("timeoutMs") as? Number)?.toLong()
+            connectionCoordinator.connect(device, timeoutMs)
+            result.success(null)
+        } catch (e: Throwable) {
+            result.error("connect_failed", e.message, null)
+        }
+    }
+
+    private fun handleDisconnect(call: MethodCall, result: Result) {
+        try {
+            val device: Map<String, Any?> = call.argument<Map<String, Any?>>("device")
+                ?: return result.error("invalid_args", "device missing", null)
+            connectionCoordinator.disconnect(device)
+            result.success(null)
+        } catch (e: Throwable) {
+            result.error("disconnect_failed", e.message, null)
+        }
     }
 
     private fun openBluetoothSettings(): Boolean {
-        val launcher = activity ?: appContext
+        val launcher: Context = activity ?: appContext
         val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
-            if (launcher !is Activity) {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            if (launcher !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         return try {
             launcher.startActivity(intent)
@@ -111,90 +163,10 @@ class PrintlyPlugin :
         }
     }
 
-    private fun registerAdapterStateReceiver() {
-        if (adapterStateReceiver != null) return
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
-                val rawState = intent.getIntExtra(
-                    BluetoothAdapter.EXTRA_STATE,
-                    BluetoothAdapter.ERROR,
-                )
-                adapterStateSink?.success(
-                    encodeAdapterStateFromRaw(rawState, currentAdapter()),
-                )
-            }
-        }
-        adapterStateReceiver = receiver
-        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            appContext.registerReceiver(receiver, filter)
-        }
-    }
-
-    private fun detachAdapterStateReceiver() {
-        val receiver = adapterStateReceiver ?: return
-        try {
-            appContext.unregisterReceiver(receiver)
-        } catch (_: IllegalArgumentException) {
-            // Already unregistered, ignore.
-        }
-        adapterStateReceiver = null
-    }
-
-    private fun currentAdapter(): BluetoothAdapter? {
-        val manager = ContextCompat.getSystemService(
-            appContext,
-            BluetoothManager::class.java,
-        ) ?: return null
-        return manager.adapter
-    }
-
-    private fun encodeAdapterState(adapter: BluetoothAdapter?): Int {
-        if (adapter == null) return CODE_UNSUPPORTED
-        if (!hasBluetoothPermission()) return CODE_UNAUTHORIZED
-        return if (adapter.isEnabled) CODE_POWERED_ON else CODE_POWERED_OFF
-    }
-
-    private fun encodeAdapterStateFromRaw(
-        rawState: Int,
-        adapter: BluetoothAdapter?,
-    ): Int {
-        if (adapter == null) return CODE_UNSUPPORTED
-        if (!hasBluetoothPermission()) return CODE_UNAUTHORIZED
-        return when (rawState) {
-            BluetoothAdapter.STATE_ON -> CODE_POWERED_ON
-            BluetoothAdapter.STATE_OFF -> CODE_POWERED_OFF
-            BluetoothAdapter.STATE_TURNING_ON,
-            BluetoothAdapter.STATE_TURNING_OFF -> CODE_RESETTING
-            else -> CODE_UNKNOWN
-        }
-    }
-
-    private fun hasBluetoothPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(
-                appContext,
-                Manifest.permission.BLUETOOTH_CONNECT,
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true
-        }
-    }
-
     private companion object {
-        const val METHOD_CHANNEL = "printly"
-        const val ADAPTER_STATE_CHANNEL = "printly/adapter_state"
-
-        // Wire protocol codes, kept in sync with BluetoothAdapterState.fromCode on the Dart side.
-        const val CODE_UNKNOWN = 0
-        const val CODE_RESETTING = 1
-        const val CODE_UNSUPPORTED = 2
-        const val CODE_UNAUTHORIZED = 3
-        const val CODE_POWERED_OFF = 4
-        const val CODE_POWERED_ON = 5
+        const val CHANNEL_METHOD = "printly"
+        const val CHANNEL_ADAPTER_STATE = "printly/adapter_state"
+        const val CHANNEL_SCAN_RESULTS = "printly/scan_results"
+        const val CHANNEL_CONNECTION_EVENTS = "printly/connection_events"
     }
 }

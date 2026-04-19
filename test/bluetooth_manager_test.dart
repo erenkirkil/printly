@@ -20,6 +20,28 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
 
   @override
   Future<bool> openBluetoothSettings() async => true;
+
+  @override
+  Future<void> startScan({required Set<ConnectionType> types}) async {}
+
+  @override
+  Future<void> stopScan() async {}
+
+  @override
+  Stream<PrintlyDevice> get scanResults => const Stream<PrintlyDevice>.empty();
+
+  @override
+  Future<void> connect({
+    required PrintlyDevice device,
+    Duration? timeout,
+  }) async {}
+
+  @override
+  Future<void> disconnect({required PrintlyDevice device}) async {}
+
+  @override
+  Stream<PrintlyConnectionEvent> get connectionEvents =>
+      const Stream<PrintlyConnectionEvent>.empty();
 }
 
 void main() {

@@ -1,6 +1,9 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import '../bluetooth/bluetooth_adapter_state.dart';
+import '../core/connection_event.dart';
+import '../core/connection_type.dart';
+import '../core/printly_device.dart';
 import 'printly_method_channel.dart';
 
 /// The interface that platform-specific implementations of `printly` must
@@ -56,5 +59,60 @@ abstract class PrintlyPlatform extends PlatformInterface {
     throw UnimplementedError(
       'openBluetoothSettings() has not been implemented.',
     );
+  }
+
+  /// Asks the native side to start discovering devices of the given [types].
+  ///
+  /// The returned future completes as soon as the native scan has been
+  /// requested — discovered devices arrive asynchronously on [scanResults].
+  /// Callers should use [stopScan] or the Dart-side timeout managed by
+  /// `ScanController` to stop the scan. Transport types not supported on the
+  /// current platform (e.g. [ConnectionType.classic] on iOS) are silently
+  /// dropped by the native side.
+  Future<void> startScan({required Set<ConnectionType> types}) {
+    throw UnimplementedError('startScan() has not been implemented.');
+  }
+
+  /// Cancels any in-progress native scan. Safe to call while no scan is
+  /// running; native implementations must treat this as a no-op in that case.
+  Future<void> stopScan() {
+    throw UnimplementedError('stopScan() has not been implemented.');
+  }
+
+  /// Broadcast stream of discovered devices, one event per advertisement.
+  ///
+  /// The same physical device may be reported multiple times (for RSSI
+  /// updates, Classic + BLE dual advertisements, etc.). De-duplication is
+  /// the responsibility of the Dart-side scan controller, not the platform
+  /// implementation.
+  Stream<PrintlyDevice> get scanResults {
+    throw UnimplementedError('scanResults has not been implemented.');
+  }
+
+  /// Asks the native side to open a link to [device]. The future completes
+  /// once the native stack reports the link as open, or rejects with a
+  /// [PlatformException] if the attempt fails (permission denied, timeout,
+  /// remote refusal, etc.).
+  ///
+  /// Per-device state transitions that happen after the future resolves —
+  /// e.g. a remote disconnect, an auto-reconnect retry — arrive through
+  /// [connectionEvents].
+  Future<void> connect({required PrintlyDevice device, Duration? timeout}) {
+    throw UnimplementedError('connect() has not been implemented.');
+  }
+
+  /// Asks the native side to close the link to [device]. Safe to call when
+  /// no link is open for [device]; native implementations must treat this as
+  /// a no-op in that case.
+  Future<void> disconnect({required PrintlyDevice device}) {
+    throw UnimplementedError('disconnect() has not been implemented.');
+  }
+
+  /// Broadcast stream of native connection state changes. Each event carries
+  /// the device it applies to and, on [ConnectionState.error], the reason
+  /// reported by the transport. De-duplication and per-device fan-out is
+  /// done in Dart.
+  Stream<PrintlyConnectionEvent> get connectionEvents {
+    throw UnimplementedError('connectionEvents has not been implemented.');
   }
 }
