@@ -4,11 +4,17 @@ import 'package:printly/printly.dart';
 import 'package:printly/src/platform/printly_method_channel.dart';
 import 'package:printly/src/platform/printly_platform_interface.dart';
 
-class MockPrintlyPlatform
-    with MockPlatformInterfaceMixin
-    implements PrintlyPlatform {
+class _MockPrintlyPlatform extends PrintlyPlatform
+    with MockPlatformInterfaceMixin {
   @override
-  Future<String?> getPlatformVersion() => Future.value('42');
+  Future<String?> getPlatformVersion() async => '42';
+
+  @override
+  Stream<BluetoothAdapterState> get adapterState =>
+      const Stream<BluetoothAdapterState>.empty();
+
+  @override
+  Future<bool> openBluetoothSettings() async => true;
 }
 
 void main() {
@@ -19,9 +25,7 @@ void main() {
   });
 
   test('getPlatformVersion', () async {
-    final MockPrintlyPlatform fakePlatform = MockPrintlyPlatform();
-    PrintlyPlatform.instance = fakePlatform;
-
+    PrintlyPlatform.instance = _MockPrintlyPlatform();
     expect(await Printly.instance.getPlatformVersion(), '42');
   });
 }

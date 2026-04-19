@@ -1,5 +1,6 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
+import '../bluetooth/bluetooth_adapter_state.dart';
 import 'printly_method_channel.dart';
 
 /// The interface that platform-specific implementations of `printly` must
@@ -32,5 +33,28 @@ abstract class PrintlyPlatform extends PlatformInterface {
   /// Returns the native platform version string (e.g. `Android 14`, `iOS 17.2`).
   Future<String?> getPlatformVersion() {
     throw UnimplementedError('getPlatformVersion() has not been implemented.');
+  }
+
+  /// A broadcast stream of native Bluetooth adapter state changes.
+  ///
+  /// Listening to this stream lazily initialises the native observer
+  /// (Android [BluetoothAdapter] broadcast receiver or iOS
+  /// `CBCentralManager`). On iOS this is also the moment the system
+  /// permission prompt is triggered if Bluetooth usage has not yet been
+  /// authorised.
+  Stream<BluetoothAdapterState> get adapterState {
+    throw UnimplementedError('adapterState has not been implemented.');
+  }
+
+  /// Opens the system Bluetooth settings page so the user can toggle the
+  /// adapter on or off.
+  ///
+  /// On Android this dispatches `Settings.ACTION_BLUETOOTH_SETTINGS`; on
+  /// iOS it opens the `App-Prefs:Bluetooth` URL scheme. Returns `true` if
+  /// the settings page was successfully launched.
+  Future<bool> openBluetoothSettings() {
+    throw UnimplementedError(
+      'openBluetoothSettings() has not been implemented.',
+    );
   }
 }
