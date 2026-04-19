@@ -1,8 +1,10 @@
+/// printly — production-grade thermal printer SDK for Flutter.
+///
+/// This is the public barrel file. Import it as:
+///
+/// ```dart
+/// import 'package:printly/printly.dart';
+/// ```
+library;
 
-import 'printly_platform_interface.dart';
-
-class Printly {
-  Future<String?> getPlatformVersion() {
-    return PrintlyPlatform.instance.getPlatformVersion();
-  }
-}
+export 'src/printly_base.dart';

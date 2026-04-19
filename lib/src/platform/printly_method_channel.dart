@@ -7,11 +7,13 @@ import 'printly_platform_interface.dart';
 class MethodChannelPrintly extends PrintlyPlatform {
   /// The method channel used to interact with the native platform.
   @visibleForTesting
-  final methodChannel = const MethodChannel('printly');
+  final MethodChannel methodChannel = const MethodChannel('printly');
 
   @override
   Future<String?> getPlatformVersion() async {
-    final version = await methodChannel.invokeMethod<String>('getPlatformVersion');
+    final version = await methodChannel.invokeMethod<String>(
+      'getPlatformVersion',
+    );
     return version;
   }
 }

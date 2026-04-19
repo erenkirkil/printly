@@ -4,14 +4,14 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'printly'
-  s.version          = '0.0.1'
-  s.summary          = 'Production-grade thermal printer SDK for Flutter. Bluetooth Classic, BLE, Ethernet/WiFi, ESC/POS, Turkish charset, built-in permission management.'
+  s.version          = '0.1.0'
+  s.summary          = 'Production-grade thermal printer SDK for Flutter.'
   s.description      = <<-DESC
 Production-grade thermal printer SDK for Flutter. Bluetooth Classic, BLE, Ethernet/WiFi, ESC/POS, Turkish charset, built-in permission management.
                        DESC
-  s.homepage         = 'http://example.com'
+  s.homepage         = 'https://github.com/erenkirkil/printly'
   s.license          = { :file => '../LICENSE' }
-  s.author           = { 'Your Company' => 'email@example.com' }
+  s.author           = { 'Eren Kırkıl' => 'erenkirkil@gmail.com' }
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'
