@@ -1,3 +1,42 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:tools="http://schemas.android.com/tools"
   package="com.erenkirkil.printly">
+
+  <!--
+    Runtime permissions required on Android 12 (API 31) and newer. The plugin
+    declares them here so consumers inherit the entries via manifest merging.
+    Apps that do not need scanning or connection on their own can remove the
+    relevant entry with tools:node="remove" in their own manifest.
+  -->
+  <uses-permission
+    android:name="android.permission.BLUETOOTH_SCAN"
+    android:usesPermissionFlags="neverForLocation"
+    tools:targetApi="s" />
+  <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+  <!--
+    Legacy permissions for Android 11 (API 30) and older. On newer releases
+    these are ignored by the platform, so the maxSdkVersion cap keeps the
+    requested permission set minimal on modern devices.
+  -->
+  <uses-permission
+    android:name="android.permission.BLUETOOTH"
+    android:maxSdkVersion="30" />
+  <uses-permission
+    android:name="android.permission.BLUETOOTH_ADMIN"
+    android:maxSdkVersion="30" />
+  <uses-permission
+    android:name="android.permission.ACCESS_FINE_LOCATION"
+    android:maxSdkVersion="30" />
+
+  <!--
+    Declare Bluetooth as an optional hardware feature so apps that use
+    printly can still be installed on devices without Bluetooth.
+  -->
+  <uses-feature
+    android:name="android.hardware.bluetooth"
+    android:required="false" />
+  <uses-feature
+    android:name="android.hardware.bluetooth_le"
+    android:required="false" />
 </manifest>
