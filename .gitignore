@@ -34,9 +34,9 @@ migrate_working_dir/
 /coverage/
 
 # Private development notes (not for public package)
-package_roadmap.md
-*_roadmap.md
-NOTES.md
-TODO.md
+docs/
+
+# Claude Code — local settings, skills, agents, memory
 .claude/
+CLAUDE.md
 
