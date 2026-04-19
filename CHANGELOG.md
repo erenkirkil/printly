@@ -1,3 +1,3 @@
-## 0.0.1
+## 0.1.0-dev
 
-* TODO: Describe initial release.
+Initial release preparation. Package scaffold, CI, and lint baseline established in Sprint 1. See [`docs/sprints.md`](docs/sprints.md) for the roadmap toward the first public release.
