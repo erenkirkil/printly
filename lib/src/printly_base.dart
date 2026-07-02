@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:permission_handler/permission_handler.dart' as ph;
 
 import 'bluetooth/bluetooth_adapter_state.dart';
@@ -11,7 +12,12 @@ import 'bluetooth/scan_controller.dart';
 import 'core/connection_state.dart';
 import 'core/connection_type.dart';
 import 'core/printly_device.dart';
+import 'core/printly_exception.dart';
+import 'core/printly_permission_status.dart';
 import 'platform/printly_platform_interface.dart';
+import 'print/print_config.dart';
+import 'print/print_job.dart';
+import 'print/printly_paper_width.dart';
 
 /// Entry point for the `printly` SDK.
 ///
@@ -19,7 +25,17 @@ import 'platform/printly_platform_interface.dart';
 /// are added progressively across sprints (see `docs/sprints.md`). Calls to
 /// not-yet-implemented APIs throw [UnimplementedError].
 class Printly {
-  Printly._();
+  Printly._() {
+    // Bound unconditionally so that a plain connect() persists the device
+    // even when no store-touching API was ever called first.
+    _bindActiveDeviceListener();
+  }
+
+  /// Test-only constructor producing an isolated facade. Production code
+  /// must use [instance]; each call creates fresh controllers bound to the
+  /// current [PrintlyPlatform.instance].
+  @visibleForTesting
+  factory Printly.forTesting() = Printly._;
 
   /// The shared [Printly] singleton.
   static final Printly instance = Printly._();
@@ -36,13 +52,29 @@ class Printly {
   StreamSubscription<BluetoothAdapterState>? _autoReconnectAdapterSub;
 
   Future<LastDeviceStore> _openStore() async {
-    final LastDeviceStore store = await (_storeFuture ??=
-        LastDeviceStore.open());
+    final Future<LastDeviceStore> future = _storeFuture ??=
+        LastDeviceStore.open();
+    final LastDeviceStore store;
+    try {
+      store = await future;
+    } catch (_) {
+      // Evict the failed future so the next call retries instead of
+      // rethrowing the same stale error for the rest of the session.
+      if (identical(_storeFuture, future)) {
+        _storeFuture = null;
+      }
+      rethrow;
+    }
     if (_cachedStore == null) {
       _cachedStore = store;
-      _cachedLastDevice = store.readDevice();
+      // A device connected in this session is fresher than the persisted one.
+      _cachedLastDevice ??= store.readDevice();
       _autoReconnectEnabled = store.readAutoReconnect();
-      _bindActiveDeviceListener();
+      if (_autoReconnectEnabled) {
+        // Restoring the flag alone is not enough — without the adapter
+        // subscription the persisted preference would never act.
+        _armAutoReconnect();
+      }
     }
     return store;
   }
@@ -53,10 +85,20 @@ class Printly {
     ) async {
       if (device == null) return;
       _cachedLastDevice = device;
-      final LastDeviceStore? store = _cachedStore;
-      if (store == null) return;
-      await store.writeDevice(device);
+      try {
+        final LastDeviceStore store = await _openStore();
+        await store.writeDevice(device);
+      } catch (_) {
+        // Persistence is best-effort: a storage failure must never surface
+        // as an unhandled async error out of a successful connect.
+      }
     });
+  }
+
+  void _armAutoReconnect() {
+    _autoReconnectAdapterSub ??= _bluetooth.stream.listen(
+      _onAdapterStateChangedForReconnect,
+    );
   }
 
   /// Returns the underlying native platform version string.
@@ -92,35 +134,45 @@ class Printly {
   /// Requests the runtime permissions required to use Bluetooth on the
   /// current platform.
   ///
-  /// On Android 12+ this asks for `BLUETOOTH_SCAN` and `BLUETOOTH_CONNECT`;
-  /// on Android 11 and earlier it asks for `BLUETOOTH` and
-  /// `ACCESS_FINE_LOCATION`. On iOS it returns the current Bluetooth
-  /// authorisation status — the actual prompt is triggered the first time
-  /// a consumer subscribes to [adapterState].
+  /// On Android 12+ (API 31+) this asks only for `BLUETOOTH_SCAN` and
+  /// `BLUETOOTH_CONNECT`; on Android 11 and earlier it asks for `BLUETOOTH`
+  /// and `ACCESS_FINE_LOCATION`. Requesting the legacy/location permissions on
+  /// Android 12+ would report `denied` (they are capped at `maxSdkVersion=30`
+  /// in the manifest) and wrongly poison the aggregate, so the request set is
+  /// chosen by the device API level. On iOS it returns the current Bluetooth
+  /// authorisation status — the actual prompt is triggered the first time a
+  /// consumer subscribes to [adapterState].
   ///
   /// Returns the aggregate worst status across the requested permissions
   /// (e.g. if one is `permanentlyDenied` the overall result is
   /// `permanentlyDenied`).
-  Future<ph.PermissionStatus> requestPermissions() async {
-    final List<ph.Permission> required = Platform.isAndroid
-        ? <ph.Permission>[
-            ph.Permission.bluetoothScan,
-            ph.Permission.bluetoothConnect,
-            ph.Permission.bluetooth,
-            ph.Permission.locationWhenInUse,
-          ]
-        : <ph.Permission>[ph.Permission.bluetooth];
+  Future<PrintlyPermissionStatus> requestPermissions() async {
+    final List<ph.Permission> required;
+    if (Platform.isAndroid) {
+      final int sdkInt = await PrintlyPlatform.instance.getAndroidSdkInt();
+      required = sdkInt >= 31
+          ? <ph.Permission>[
+              ph.Permission.bluetoothScan,
+              ph.Permission.bluetoothConnect,
+            ]
+          : <ph.Permission>[
+              ph.Permission.bluetooth,
+              ph.Permission.locationWhenInUse,
+            ];
+    } else {
+      required = <ph.Permission>[ph.Permission.bluetooth];
+    }
 
     final Map<ph.Permission, ph.PermissionStatus> results = await required
         .request();
-    return _aggregateStatus(results.values);
+    return _aggregateStatus(results.values.map(_toPrintlyStatus));
   }
 
   /// Opens the system Bluetooth settings page.
   ///
-  /// On Android this uses `Settings.ACTION_BLUETOOTH_SETTINGS`; on iOS it
-  /// opens the app-level Bluetooth settings pane via the
-  /// `App-Prefs:Bluetooth` URL scheme.
+  /// On Android this uses `Settings.ACTION_BLUETOOTH_SETTINGS`. iOS offers
+  /// no public deep link to the Bluetooth pane, so the app's own settings
+  /// page is opened instead.
   Future<bool> openBluetoothSettings() {
     return PrintlyPlatform.instance.openBluetoothSettings();
   }
@@ -152,6 +204,12 @@ class Printly {
   /// Broadcast stream signalling whether a scan is currently running.
   Stream<bool> get isScanningStream => _scan.isScanningStream;
 
+  /// Broadcast stream of asynchronous scan failures (Bluetooth toggled off
+  /// mid-scan, native scan-failed callbacks). Without subscribing here, such
+  /// a failure is indistinguishable from a normal timeout stop — see
+  /// [ScanController.scanErrors].
+  Stream<PrintlyException> get scanErrorsStream => _scan.scanErrors;
+
   /// Synchronous snapshot of the currently known devices.
   List<PrintlyDevice> get currentDevices => _scan.currentDevices;
 
@@ -163,10 +221,26 @@ class Printly {
 
   /// Opens a link to [device]. Idempotent for duplicate taps and serialises
   /// switching between two devices (disconnect current, then connect new).
+  ///
+  /// Completes with a [PrintlyConnectionException] when the attempt fails
+  /// (its [PrintlyException.code] distinguishes timeouts, refusals, and
+  /// dropped links) and with a [PrintlyUnsupportedException] for
+  /// [ConnectionType.network] devices — the network transport ships in a
+  /// later release.
   Future<void> connect(
     PrintlyDevice device, {
     Duration timeout = kDefaultConnectTimeout,
-  }) => _connection.connect(device, timeout: timeout);
+  }) async {
+    if (device.type == ConnectionType.network) {
+      // Fail fast with a typed error instead of a native round-trip that
+      // would reject with the same reason after a delay.
+      throw const PrintlyUnsupportedException(
+        PrintlyErrorCode.networkNotSupported,
+        'Network (Ethernet/WiFi) printing is not implemented yet.',
+      );
+    }
+    return _connection.connect(device, timeout: timeout);
+  }
 
   /// Closes the current link. When [device] is omitted, disconnects the
   /// currently active device (if any).
@@ -192,6 +266,31 @@ class Printly {
   /// successful connect.
   String? lastFailureReasonOf(PrintlyDevice device) =>
       _connection.lastFailureReasonOf(device);
+
+  /// Creates a new [PrintJob] for the given paper width.
+  ///
+  /// Loads (and caches) the ESC/POS capability profile, so the first call may
+  /// await a one-time asset read. When [config] is supplied its
+  /// [PrintConfig.paperWidth] takes precedence over the [paperWidth] argument.
+  Future<PrintJob> newJob({
+    PrintlyPaperWidth paperWidth = PrintlyPaperWidth.mm58,
+    PrintConfig? config,
+  }) => PrintJob.create(paperWidth: paperWidth, config: config);
+
+  /// Serialises [job] and writes it to [device] over the open connection.
+  /// Build the [job] with [newJob].
+  ///
+  /// Rejects with a [PrintlyWriteException] whose [PrintlyException.code]
+  /// is one of [PrintlyErrorCode.notConnected] (connect first),
+  /// [PrintlyErrorCode.notReady] (BLE link up but not writable yet),
+  /// [PrintlyErrorCode.writeBusy] (previous write still in flight),
+  /// [PrintlyErrorCode.writeTimeout] (printer stopped acknowledging —
+  /// usually worth a reconnect + retry), [PrintlyErrorCode.disconnected],
+  /// or [PrintlyErrorCode.writeFailed]. On iOS printing ships in a later
+  /// release and currently rejects with a [PrintlyUnsupportedException].
+  Future<void> print(PrintlyDevice device, PrintJob job) {
+    return PrintlyPlatform.instance.write(device: device, bytes: job.build());
+  }
 
   /// Loads the last persisted device and auto-reconnect flag, caches them
   /// in-memory, and returns the device (or `null`).
@@ -244,9 +343,7 @@ class Printly {
       await store.writeAutoReconnect(enabled: enabled);
     }
     if (enabled) {
-      _autoReconnectAdapterSub ??= _bluetooth.stream.listen(
-        _onAdapterStateChangedForReconnect,
-      );
+      _armAutoReconnect();
     } else {
       await _autoReconnectAdapterSub?.cancel();
       _autoReconnectAdapterSub = null;
@@ -267,35 +364,54 @@ class Printly {
     unawaited(_connection.connect(device).catchError((_) {}));
   }
 
-  static ph.PermissionStatus _aggregateStatus(
-    Iterable<ph.PermissionStatus> statuses,
+  /// Maps `permission_handler`'s status into printly's own enum so the
+  /// third-party type never leaks into the public API surface.
+  static PrintlyPermissionStatus _toPrintlyStatus(ph.PermissionStatus status) {
+    switch (status) {
+      case ph.PermissionStatus.granted:
+        return PrintlyPermissionStatus.granted;
+      case ph.PermissionStatus.denied:
+        return PrintlyPermissionStatus.denied;
+      case ph.PermissionStatus.permanentlyDenied:
+        return PrintlyPermissionStatus.permanentlyDenied;
+      case ph.PermissionStatus.restricted:
+        return PrintlyPermissionStatus.restricted;
+      case ph.PermissionStatus.limited:
+        return PrintlyPermissionStatus.limited;
+      case ph.PermissionStatus.provisional:
+        return PrintlyPermissionStatus.provisional;
+    }
+  }
+
+  static PrintlyPermissionStatus _aggregateStatus(
+    Iterable<PrintlyPermissionStatus> statuses,
   ) {
     if (statuses.isEmpty) {
-      return ph.PermissionStatus.denied;
+      return PrintlyPermissionStatus.denied;
     }
     return statuses.reduce(_worse);
   }
 
-  static ph.PermissionStatus _worse(
-    ph.PermissionStatus a,
-    ph.PermissionStatus b,
+  static PrintlyPermissionStatus _worse(
+    PrintlyPermissionStatus a,
+    PrintlyPermissionStatus b,
   ) {
     return _severity(a) >= _severity(b) ? a : b;
   }
 
-  static int _severity(ph.PermissionStatus status) {
+  static int _severity(PrintlyPermissionStatus status) {
     switch (status) {
-      case ph.PermissionStatus.permanentlyDenied:
+      case PrintlyPermissionStatus.permanentlyDenied:
         return 4;
-      case ph.PermissionStatus.restricted:
+      case PrintlyPermissionStatus.restricted:
         return 3;
-      case ph.PermissionStatus.denied:
+      case PrintlyPermissionStatus.denied:
         return 2;
-      case ph.PermissionStatus.provisional:
+      case PrintlyPermissionStatus.provisional:
         return 1;
-      case ph.PermissionStatus.limited:
+      case PrintlyPermissionStatus.limited:
         return 1;
-      case ph.PermissionStatus.granted:
+      case PrintlyPermissionStatus.granted:
         return 0;
     }
   }

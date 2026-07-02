@@ -1,6 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-  xmlns:tools="http://schemas.android.com/tools"
-  package="com.erenkirkil.printly">
+  xmlns:tools="http://schemas.android.com/tools">
 
   <!--
     Runtime permissions required on Android 12 (API 31) and newer. The plugin

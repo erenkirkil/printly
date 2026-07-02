@@ -5,9 +5,12 @@
 Pod::Spec.new do |s|
   s.name             = 'printly'
   s.version          = '0.1.0'
-  s.summary          = 'Production-grade thermal printer SDK for Flutter.'
+  s.summary          = 'Thermal printer SDK for Flutter.'
   s.description      = <<-DESC
-Production-grade thermal printer SDK for Flutter. Bluetooth Classic, BLE, Ethernet/WiFi, ESC/POS, Turkish charset, built-in permission management.
+Thermal printer SDK for Flutter. On iOS this pod provides BLE scanning and
+connection via CoreBluetooth; ESC/POS printing and the network (TCP/9100)
+transport are in progress. Bluetooth Classic is Android-only, because iOS
+requires MFi certification for Classic SPP devices.
                        DESC
   s.homepage         = 'https://github.com/erenkirkil/printly'
   s.license          = { :file => '../LICENSE' }

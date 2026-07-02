@@ -24,25 +24,35 @@ public class PrintlyPlugin: NSObject, FlutterPlugin {
         instance.wireCentralObservers()
 
         let methodChannel = FlutterMethodChannel(
-            name: "printly",
+            name: WireCodes.Channels.method,
             binaryMessenger: registrar.messenger()
         )
         registrar.addMethodCallDelegate(instance, channel: methodChannel)
 
         FlutterEventChannel(
-            name: "printly/adapter_state",
+            name: WireCodes.Channels.adapterState,
             binaryMessenger: registrar.messenger()
         ).setStreamHandler(instance.adapterStateHandler)
 
         FlutterEventChannel(
-            name: "printly/scan_results",
+            name: WireCodes.Channels.scanResults,
             binaryMessenger: registrar.messenger()
         ).setStreamHandler(instance.scanResultsHandler)
 
         FlutterEventChannel(
-            name: "printly/connection_events",
+            name: WireCodes.Channels.connectionEvents,
             binaryMessenger: registrar.messenger()
         ).setStreamHandler(instance.connectionEventsHandler)
+    }
+
+    public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
+        // Native resources must not outlive the engine: stop any running
+        // scan, tear down live connections, and drop the event sinks.
+        scanResultsHandler.detach()
+        connectionCoordinator.detach()
+        adapterStateHandler.detach()
+        connectionEventsHandler.detach()
+        central.detach()
     }
 
     private func wireCentralObservers() {
@@ -56,75 +66,94 @@ public class PrintlyPlugin: NSObject, FlutterPlugin {
         result: @escaping FlutterResult
     ) {
         switch call.method {
-        case "getPlatformVersion":
+        case WireCodes.Methods.getPlatformVersion:
             result("iOS " + UIDevice.current.systemVersion)
-        case "openBluetoothSettings":
+        case WireCodes.Methods.openBluetoothSettings:
             result(Self.openBluetoothSettings())
-        case "startScan":
+        case WireCodes.Methods.startScan:
             handleStartScan(call: call, result: result)
-        case "stopScan":
+        case WireCodes.Methods.stopScan:
             scanResultsHandler.stop()
             result(nil)
-        case "connect":
+        case WireCodes.Methods.connect:
             handleConnect(call: call, result: result)
-        case "disconnect":
+        case WireCodes.Methods.disconnect:
             handleDisconnect(call: call, result: result)
+        case WireCodes.Methods.write:
+            handleWrite(call: call, result: result)
         default:
             result(FlutterMethodNotImplemented)
         }
     }
 
     private func handleStartScan(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        do {
-            let args = call.arguments as? [String: Any] ?? [:]
-            let rawTypes = args["types"] as? [Any] ?? []
-            let types: [Int] = rawTypes.compactMap { ($0 as? NSNumber)?.intValue }
-            try scanResultsHandler.start(types: types)
-            result(nil)
-        } catch {
-            result(FlutterError(
-                code: "start_scan_failed",
-                message: error.localizedDescription,
-                details: nil
-            ))
+        let args = call.arguments as? [String: Any] ?? [:]
+        let rawTypes = args[WireCodes.Keys.types] as? [Any] ?? []
+        let types: [Int] = rawTypes.compactMap { ($0 as? NSNumber)?.intValue }
+        scanResultsHandler.start(types: types) { outcome in
+            switch outcome {
+            case .success:
+                result(nil)
+            case .failure(let error):
+                result(FlutterError(
+                    code: error.flutterCode,
+                    message: error.reason,
+                    details: nil
+                ))
+            }
         }
     }
 
     private func handleConnect(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
-              let device = args["device"] as? [String: Any] else {
-            result(FlutterError(code: "invalid_args", message: "device missing", details: nil))
+              let device = args[WireCodes.Keys.device] as? [String: Any] else {
+            result(FlutterError(
+                code: WireCodes.Reasons.invalidArgs,
+                message: "device missing",
+                details: nil
+            ))
             return
         }
-        let timeoutMs = (args["timeoutMs"] as? NSNumber)?.intValue
+        let timeoutMs = (args[WireCodes.Keys.timeoutMs] as? NSNumber)?.intValue
         connectionCoordinator.connect(payload: device, timeoutMs: timeoutMs)
         result(nil)
     }
 
     private func handleDisconnect(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
-              let device = args["device"] as? [String: Any] else {
-            result(FlutterError(code: "invalid_args", message: "device missing", details: nil))
+              let device = args[WireCodes.Keys.device] as? [String: Any] else {
+            result(FlutterError(
+                code: WireCodes.Reasons.invalidArgs,
+                message: "device missing",
+                details: nil
+            ))
             return
         }
         connectionCoordinator.disconnect(payload: device)
         result(nil)
     }
 
+    private func handleWrite(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        // iOS printing (BLE GATT writes) lands in Sprint 6 alongside the rest
+        // of the CoreBluetooth characteristic work. Reject explicitly so the
+        // public API exists and callers get a clear, actionable error today.
+        result(FlutterError(
+            code: WireCodes.Reasons.unsupportedPlatform,
+            message: "Printing is not yet implemented on iOS (planned for Sprint 6).",
+            details: nil
+        ))
+    }
+
     private static func openBluetoothSettings() -> Bool {
-        // `App-Prefs:Bluetooth` opens the Bluetooth pane inside the Settings
-        // app on iOS 13+. Fall back to the app-level settings URL so the
-        // user is at least taken somewhere meaningful on unsupported iOS
-        // revisions.
-        if let prefsURL = URL(string: "App-Prefs:Bluetooth"),
-           UIApplication.shared.canOpenURL(prefsURL) {
-            UIApplication.shared.open(prefsURL)
-            return true
+        // iOS has no public deep link to the Bluetooth pane — `App-Prefs:` is
+        // a private scheme and an App Store guideline 2.5.1 rejection risk,
+        // so the app's own settings page is the closest supported
+        // destination. The Dart-side docs state this honestly.
+        guard let settingsURL = URL(string: UIApplication.openSettingsURLString),
+              UIApplication.shared.canOpenURL(settingsURL) else {
+            return false
         }
-        if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
-            UIApplication.shared.open(settingsURL)
-            return true
-        }
-        return false
+        UIApplication.shared.open(settingsURL)
+        return true
     }
 }

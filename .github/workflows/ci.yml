@@ -35,10 +35,57 @@ jobs:
       - name: Run tests
         run: flutter test
 
+      - name: Install example dependencies
+        run: flutter pub get
+        working-directory: example
+
+      - name: Run example tests
+        run: flutter test
+        working-directory: example
+
+  build-android:
+    name: Build Android (compiles plugin Kotlin)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build example APK
+        run: flutter build apk --debug
+        working-directory: example
+
+  build-ios:
+    name: Build iOS (compiles plugin Swift)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build example iOS app (no codesign)
+        run: flutter build ios --debug --no-codesign
+        working-directory: example
+
   publish-dry-run:
     name: pub publish --dry-run
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4

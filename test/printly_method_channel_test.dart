@@ -32,6 +32,8 @@ void main() {
           switch (call.method) {
             case 'getPlatformVersion':
               return '42';
+            case 'getAndroidSdkInt':
+              return 31;
             case 'openBluetoothSettings':
               return true;
             default:
@@ -59,6 +61,11 @@ void main() {
   test('openBluetoothSettings delegates and unwraps the boolean', () async {
     expect(await platform.openBluetoothSettings(), isTrue);
     expect(invokedMethod, 'openBluetoothSettings');
+  });
+
+  test('getAndroidSdkInt delegates and unwraps the int', () async {
+    expect(await platform.getAndroidSdkInt(), 31);
+    expect(invokedMethod, 'getAndroidSdkInt');
   });
 
   test('adapterState decodes integer events into enum values', () async {
@@ -178,6 +185,103 @@ void main() {
     final Map<Object?, Object?> args =
         invocations.single.arguments as Map<Object?, Object?>;
     expect((args['device'] as Map<Object?, Object?>)['address'], 'AA:BB');
+  });
+
+  test('write forwards device payload and bytes', () async {
+    const PrintlyDevice device = PrintlyDevice(
+      address: 'AA:BB',
+      type: ConnectionType.classic,
+    );
+    final Uint8List bytes = Uint8List.fromList(<int>[0x1B, 0x40, 0x41]);
+    await platform.write(device: device, bytes: bytes);
+    expect(invokedMethod, 'write');
+    final Map<Object?, Object?> args =
+        invocations.single.arguments as Map<Object?, Object?>;
+    expect((args['device'] as Map<Object?, Object?>)['address'], 'AA:BB');
+    expect((args['device'] as Map<Object?, Object?>)['type'], 0);
+    // Bytes must travel as a Uint8List (zero-copy typed-data path), not a
+    // boxed List<int>.
+    expect(args['bytes'], isA<Uint8List>());
+    expect(args['bytes'], <int>[0x1B, 0x40, 0x41]);
+  });
+
+  group('typed error mapping', () {
+    void throwOnInvoke(String code, String? message) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(methodChannel, (MethodCall call) async {
+            throw PlatformException(code: code, message: message);
+          });
+    }
+
+    const PrintlyDevice device = PrintlyDevice(
+      address: 'AA:BB',
+      type: ConnectionType.ble,
+    );
+
+    test('startScan maps the specific message over the generic code', () async {
+      throwOnInvoke('start_scan_failed', 'bluetooth_not_powered_on');
+      await expectLater(
+        platform.startScan(types: const <ConnectionType>{ConnectionType.ble}),
+        throwsA(
+          isA<PrintlyScanException>().having(
+            (PrintlyScanException e) => e.code,
+            'code',
+            PrintlyErrorCode.bluetoothNotPoweredOn,
+          ),
+        ),
+      );
+    });
+
+    test('permission failures map to PrintlyPermissionException', () async {
+      throwOnInvoke('permission_denied', 'bluetooth_scan_denied');
+      await expectLater(
+        platform.startScan(types: const <ConnectionType>{ConnectionType.ble}),
+        throwsA(isA<PrintlyPermissionException>()),
+      );
+    });
+
+    test('write maps write_timeout even when the code is generic', () async {
+      throwOnInvoke('write_failed', 'write_timeout');
+      await expectLater(
+        platform.write(device: device, bytes: Uint8List.fromList(<int>[1])),
+        throwsA(
+          isA<PrintlyWriteException>().having(
+            (PrintlyWriteException e) => e.code,
+            'code',
+            PrintlyErrorCode.writeTimeout,
+          ),
+        ),
+      );
+    });
+
+    test('unsupported-platform rejections map to '
+        'PrintlyUnsupportedException', () async {
+      throwOnInvoke('unsupported_platform', 'ios write ships in sprint 6');
+      await expectLater(
+        platform.write(device: device, bytes: Uint8List.fromList(<int>[1])),
+        throwsA(isA<PrintlyUnsupportedException>()),
+      );
+    });
+
+    test('unclassifiable errors keep the raw message under unknown', () async {
+      throwOnInvoke('something_new', 'exotic native failure');
+      await expectLater(
+        platform.connect(device: device),
+        throwsA(
+          isA<PrintlyConnectionException>()
+              .having(
+                (PrintlyConnectionException e) => e.code,
+                'code',
+                PrintlyErrorCode.unknown,
+              )
+              .having(
+                (PrintlyConnectionException e) => e.message,
+                'message',
+                'exotic native failure',
+              ),
+        ),
+      );
+    });
   });
 
   test('connectionEvents decode raw map payloads', () async {

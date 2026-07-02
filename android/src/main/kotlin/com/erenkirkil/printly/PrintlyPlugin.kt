@@ -9,6 +9,7 @@ import com.erenkirkil.printly.adapter.AdapterStateStreamHandler
 import com.erenkirkil.printly.connection.ConnectionCoordinator
 import com.erenkirkil.printly.connection.ConnectionEventsStreamHandler
 import com.erenkirkil.printly.scan.ScanResultsStreamHandler
+import com.erenkirkil.printly.util.WireCodes
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -48,19 +49,23 @@ class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         scanResultsHandler = ScanResultsStreamHandler(appContext)
         connectionEventsHandler = ConnectionEventsStreamHandler()
         connectionCoordinator = ConnectionCoordinator(appContext, connectionEventsHandler)
+        // Skip Classic inquiry while a link is open — inquiry can stall/drop it.
+        scanResultsHandler.isConnectionActive = connectionCoordinator::hasActiveConnections
 
-        methodChannel = MethodChannel(binding.binaryMessenger, CHANNEL_METHOD).also {
+        methodChannel = MethodChannel(binding.binaryMessenger, WireCodes.Channels.METHOD).also {
             it.setMethodCallHandler(this)
         }
-        adapterStateChannel = EventChannel(binding.binaryMessenger, CHANNEL_ADAPTER_STATE).also {
-            it.setStreamHandler(adapterStateHandler)
-        }
-        scanResultsChannel = EventChannel(binding.binaryMessenger, CHANNEL_SCAN_RESULTS).also {
-            it.setStreamHandler(scanResultsHandler)
-        }
+        adapterStateChannel = EventChannel(
+            binding.binaryMessenger,
+            WireCodes.Channels.ADAPTER_STATE,
+        ).also { it.setStreamHandler(adapterStateHandler) }
+        scanResultsChannel = EventChannel(
+            binding.binaryMessenger,
+            WireCodes.Channels.SCAN_RESULTS,
+        ).also { it.setStreamHandler(scanResultsHandler) }
         connectionEventsChannel = EventChannel(
             binding.binaryMessenger,
-            CHANNEL_CONNECTION_EVENTS,
+            WireCodes.Channels.CONNECTION_EVENTS,
         ).also { it.setStreamHandler(connectionEventsHandler) }
     }
 
@@ -94,27 +99,30 @@ class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
 
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
-            "getPlatformVersion" -> result.success("Android ${Build.VERSION.RELEASE}")
-            "openBluetoothSettings" -> result.success(openBluetoothSettings())
-            "startScan" -> handleStartScan(call, result)
-            "stopScan" -> handleStopScan(result)
-            "connect" -> handleConnect(call, result)
-            "disconnect" -> handleDisconnect(call, result)
+            WireCodes.Methods.GET_PLATFORM_VERSION ->
+                result.success("Android ${Build.VERSION.RELEASE}")
+            WireCodes.Methods.GET_ANDROID_SDK_INT -> result.success(Build.VERSION.SDK_INT)
+            WireCodes.Methods.OPEN_BLUETOOTH_SETTINGS -> result.success(openBluetoothSettings())
+            WireCodes.Methods.START_SCAN -> handleStartScan(call, result)
+            WireCodes.Methods.STOP_SCAN -> handleStopScan(result)
+            WireCodes.Methods.CONNECT -> handleConnect(call, result)
+            WireCodes.Methods.DISCONNECT -> handleDisconnect(call, result)
+            WireCodes.Methods.WRITE -> handleWrite(call, result)
             else -> result.notImplemented()
         }
     }
 
     private fun handleStartScan(call: MethodCall, result: Result) {
         try {
-            val types: List<Int> = call.argument<List<Any?>>("types")
+            val types: List<Int> = call.argument<List<Any?>>(WireCodes.Keys.TYPES)
                 ?.mapNotNull { (it as? Number)?.toInt() }
                 ?: emptyList()
             scanResultsHandler.start(types)
             result.success(null)
         } catch (e: SecurityException) {
-            result.error("permission_denied", e.message, null)
+            result.error(WireCodes.Reasons.PERMISSION_DENIED, e.message, null)
         } catch (e: Throwable) {
-            result.error("start_scan_failed", e.message, null)
+            result.error(WireCodes.Reasons.START_SCAN_FAILED, e.message, null)
         }
     }
 
@@ -129,24 +137,54 @@ class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
 
     private fun handleConnect(call: MethodCall, result: Result) {
         try {
-            val device: Map<String, Any?> = call.argument<Map<String, Any?>>("device")
-                ?: return result.error("invalid_args", "device missing", null)
-            val timeoutMs: Long? = (call.argument<Any?>("timeoutMs") as? Number)?.toLong()
+            val device: Map<String, Any?> =
+                call.argument<Map<String, Any?>>(WireCodes.Keys.DEVICE)
+                    ?: return result.error("invalid_args", "device missing", null)
+            val timeoutMs: Long? =
+                (call.argument<Any?>(WireCodes.Keys.TIMEOUT_MS) as? Number)?.toLong()
             connectionCoordinator.connect(device, timeoutMs)
             result.success(null)
         } catch (e: Throwable) {
-            result.error("connect_failed", e.message, null)
+            result.error(WireCodes.Reasons.CONNECT_FAILED, e.message, null)
         }
     }
 
     private fun handleDisconnect(call: MethodCall, result: Result) {
         try {
-            val device: Map<String, Any?> = call.argument<Map<String, Any?>>("device")
-                ?: return result.error("invalid_args", "device missing", null)
+            val device: Map<String, Any?> =
+                call.argument<Map<String, Any?>>(WireCodes.Keys.DEVICE)
+                    ?: return result.error("invalid_args", "device missing", null)
             connectionCoordinator.disconnect(device)
             result.success(null)
         } catch (e: Throwable) {
             result.error("disconnect_failed", e.message, null)
+        }
+    }
+
+    private fun handleWrite(call: MethodCall, result: Result) {
+        val device: Map<String, Any?> =
+            call.argument<Map<String, Any?>>(WireCodes.Keys.DEVICE)
+                ?: return result.error("invalid_args", "device missing", null)
+        val bytes: ByteArray = call.argument<ByteArray>(WireCodes.Keys.BYTES)
+            ?: return result.error("invalid_args", "bytes missing", null)
+        connectionCoordinator.write(device, bytes) { error ->
+            if (error == null) {
+                result.success(null)
+            } else {
+                // Pass shared-vocabulary reasons through as their own codes so
+                // Dart can classify them; anything else collapses to the
+                // generic write_failed with the raw reason in the message.
+                val code = when (error.message) {
+                    WireCodes.Reasons.NOT_CONNECTED,
+                    WireCodes.Reasons.NOT_READY,
+                    WireCodes.Reasons.WRITE_BUSY,
+                    WireCodes.Reasons.WRITE_TIMEOUT,
+                    WireCodes.Reasons.DISCONNECTED,
+                    -> error.message!!
+                    else -> WireCodes.Reasons.WRITE_FAILED
+                }
+                result.error(code, error.message, null)
+            }
         }
     }
 
@@ -161,12 +199,5 @@ class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         } catch (_: Exception) {
             false
         }
-    }
-
-    private companion object {
-        const val CHANNEL_METHOD = "printly"
-        const val CHANNEL_ADAPTER_STATE = "printly/adapter_state"
-        const val CHANNEL_SCAN_RESULTS = "printly/scan_results"
-        const val CHANNEL_CONNECTION_EVENTS = "printly/connection_events"
     }
 }

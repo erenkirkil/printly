@@ -86,19 +86,27 @@ void main() {
       expect(identical(first, second), isTrue);
 
       platform.connectCompleter!.complete();
-      await Future.wait(<Future<void>>[first, second]);
-      expect(platform.connectCalls, 1);
-    });
-
-    test('connect() while already connected is a no-op', () async {
-      await controller.connect(deviceA);
+      await Future<void>.delayed(Duration.zero);
       platform.emit(
         const PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
       );
+      await Future.wait(<Future<void>>[first, second]);
+      expect(platform.connectCalls, 1);
+    });
+
+    test('connect() while already connected is a no-op', () async {
+      final Future<void> f = controller.connect(deviceA);
       await Future<void>.delayed(Duration.zero);
+      platform.emit(
+        const PrintlyConnectionEvent(
+          device: deviceA,
+          state: ConnectionState.connected,
+        ),
+      );
+      await f;
       expect(controller.stateOf(deviceA), ConnectionState.connected);
 
       await controller.connect(deviceA);
@@ -106,30 +114,40 @@ void main() {
     });
 
     test('switching to a new device disconnects the previous first', () async {
-      await controller.connect(deviceA);
+      final Future<void> fa = controller.connect(deviceA);
+      await Future<void>.delayed(Duration.zero);
       platform.emit(
         const PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
       );
-      await Future<void>.delayed(Duration.zero);
+      await fa;
       expect(controller.activeDevice, deviceA);
 
-      await controller.connect(deviceB);
+      final Future<void> fb = controller.connect(deviceB);
+      await Future<void>.delayed(Duration.zero);
+      platform.emit(
+        const PrintlyConnectionEvent(
+          device: deviceB,
+          state: ConnectionState.connected,
+        ),
+      );
+      await fb;
       expect(platform.disconnectDevices, <PrintlyDevice>[deviceA]);
       expect(platform.connectDevices, <PrintlyDevice>[deviceA, deviceB]);
     });
 
     test('concurrent disconnect() calls share one native request', () async {
-      await controller.connect(deviceA);
+      final Future<void> f = controller.connect(deviceA);
+      await Future<void>.delayed(Duration.zero);
       platform.emit(
         const PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
       );
-      await Future<void>.delayed(Duration.zero);
+      await f;
 
       final Future<void> a = controller.disconnect(device: deviceA);
       final Future<void> b = controller.disconnect(device: deviceA);
@@ -231,6 +249,134 @@ void main() {
         );
         expect(controller.stateOf(deviceA), ConnectionState.error);
         expect(controller.lastFailureReasonOf(deviceA), contains('refused'));
+      },
+    );
+  });
+
+  group('connect resolution', () {
+    test('future resolves only when the connected event arrives', () async {
+      final Future<void> future = controller.connect(deviceA);
+      bool done = false;
+      unawaited(future.then((_) => done = true));
+      await Future<void>.delayed(Duration.zero);
+      // Native request dispatched, but no terminal event yet.
+      expect(done, isFalse);
+
+      platform.emit(
+        const PrintlyConnectionEvent(
+          device: deviceA,
+          state: ConnectionState.connected,
+        ),
+      );
+      await future;
+      expect(done, isTrue);
+    });
+
+    test('future fails when an error event arrives', () async {
+      final Future<void> future = controller.connect(deviceA);
+      await Future<void>.delayed(Duration.zero);
+      platform.emit(
+        const PrintlyConnectionEvent(
+          device: deviceA,
+          state: ConnectionState.error,
+          failureReason: 'refused',
+        ),
+      );
+      await expectLater(future, throwsA(isA<Exception>()));
+      expect(controller.stateOf(deviceA), ConnectionState.error);
+    });
+
+    test('future fails on a timeout when nothing terminal arrives', () async {
+      final Future<void> future = controller.connect(
+        deviceA,
+        timeout: const Duration(milliseconds: 30),
+      );
+      await expectLater(future, throwsA(isA<TimeoutException>()));
+      expect(controller.stateOf(deviceA), ConnectionState.error);
+    });
+  });
+
+  group('disconnect-then-connect race', () {
+    Future<void> establish(PrintlyDevice device) async {
+      final Future<void> f = controller.connect(device);
+      await Future<void>.delayed(Duration.zero);
+      platform.emit(
+        PrintlyConnectionEvent(
+          device: device,
+          state: ConnectionState.connected,
+        ),
+      );
+      await f;
+    }
+
+    test('stale disconnected event from the old link does not reject a fresh '
+        'connect for the same device', () async {
+      await establish(deviceA);
+
+      // Fire-and-forget "reconnect" gesture: disconnect + connect without
+      // awaiting in between.
+      unawaited(controller.disconnect(device: deviceA));
+      final Future<void> reconnect = controller.connect(deviceA);
+      await Future<void>.delayed(Duration.zero);
+
+      // The OLD link's terminal event lands after the new attempt started…
+      platform.emit(
+        const PrintlyConnectionEvent(
+          device: deviceA,
+          state: ConnectionState.disconnected,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      // …and must neither reject the pending future nor flip the state.
+      expect(controller.stateOf(deviceA), ConnectionState.connecting);
+
+      platform.emit(
+        const PrintlyConnectionEvent(
+          device: deviceA,
+          state: ConnectionState.connected,
+        ),
+      );
+      await reconnect;
+      expect(controller.stateOf(deviceA), ConnectionState.connected);
+    });
+
+    test('only the first disconnected event is swallowed', () async {
+      await establish(deviceA);
+
+      unawaited(controller.disconnect(device: deviceA));
+      final Future<void> reconnect = controller.connect(deviceA);
+      await Future<void>.delayed(Duration.zero);
+
+      // Old link's terminal event (swallowed)…
+      platform.emit(
+        const PrintlyConnectionEvent(
+          device: deviceA,
+          state: ConnectionState.disconnected,
+        ),
+      );
+      // …then the NEW attempt genuinely fails with a disconnect.
+      platform.emit(
+        const PrintlyConnectionEvent(
+          device: deviceA,
+          state: ConnectionState.disconnected,
+        ),
+      );
+      await expectLater(reconnect, throwsA(isA<Exception>()));
+      expect(controller.stateOf(deviceA), ConnectionState.disconnected);
+    });
+
+    test(
+      'a plain disconnected event still rejects a pending connect',
+      () async {
+        final Future<void> future = controller.connect(deviceA);
+        await Future<void>.delayed(Duration.zero);
+        platform.emit(
+          const PrintlyConnectionEvent(
+            device: deviceA,
+            state: ConnectionState.disconnected,
+          ),
+        );
+        await expectLater(future, throwsA(isA<Exception>()));
       },
     );
   });

@@ -7,12 +7,27 @@
 /// ```
 library;
 
-export 'package:permission_handler/permission_handler.dart'
-    show PermissionStatus;
-
 export 'src/bluetooth/bluetooth_adapter_state.dart';
+export 'src/bluetooth/connection_controller.dart' show kDefaultConnectTimeout;
+export 'src/bluetooth/scan_controller.dart'
+    show kDefaultScanTimeout, kDefaultScanTypes;
 export 'src/core/connection_event.dart';
 export 'src/core/connection_state.dart';
 export 'src/core/connection_type.dart';
 export 'src/core/printly_device.dart';
+export 'src/core/printly_exception.dart';
+export 'src/core/printly_permission_status.dart';
+export 'src/print/print_config.dart';
+export 'src/print/print_job.dart';
+export 'src/print/printly_barcode_type.dart';
+export 'src/print/printly_charset.dart';
+export 'src/print/printly_cut_mode.dart';
+export 'src/print/printly_hri_position.dart';
+export 'src/print/printly_paper_width.dart';
+export 'src/print/printly_qr_error_level.dart';
+export 'src/print/printly_text_align.dart';
+export 'src/print/printly_text_size.dart';
+export 'src/print/printly_text_style.dart';
+export 'src/print/qr_sizing.dart';
+export 'src/print/turkish_code_page.dart';
 export 'src/printly_base.dart';

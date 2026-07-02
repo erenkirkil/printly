@@ -9,11 +9,9 @@
 /// disconnected → connecting → connected → disconnecting → disconnected
 /// ```
 ///
-/// Auto-reconnect adds the [reconnecting] state between a lost [connected]
-/// and the next [connecting] attempt. A failed attempt ends in [error]; the
-/// accompanying failure reason is delivered via the connection failure API
-/// rather than embedded in the enum so that the enum itself stays comparable
-/// by value.
+/// A failed attempt ends in [error]; the accompanying failure reason is
+/// delivered via the connection failure API rather than embedded in the
+/// enum so that the enum itself stays comparable by value.
 enum ConnectionState {
   /// No link is open and no attempt is in progress.
   disconnected,
@@ -28,8 +26,10 @@ enum ConnectionState {
   /// A graceful close is in progress.
   disconnecting,
 
-  /// Auto-reconnect is trying to restore a previously `connected` link after
-  /// the transport dropped.
+  /// Reserved for a future native auto-reconnect flow. **Not emitted in the
+  /// current release** — the Dart-side auto-reconnect retries via a plain
+  /// connect, which reports [connecting]. The wire code stays allocated so
+  /// enabling it later is not a breaking change.
   reconnecting,
 
   /// The last connection attempt ended in a failure. The connection controller

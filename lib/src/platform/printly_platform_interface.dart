@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import '../bluetooth/bluetooth_adapter_state.dart';
@@ -36,6 +38,12 @@ abstract class PrintlyPlatform extends PlatformInterface {
   /// Returns the native platform version string (e.g. `Android 14`, `iOS 17.2`).
   Future<String?> getPlatformVersion() {
     throw UnimplementedError('getPlatformVersion() has not been implemented.');
+  }
+
+  /// Returns the Android API level (`Build.VERSION.SDK_INT`). Only meaningful
+  /// on Android; callers must guard with `Platform.isAndroid` before invoking.
+  Future<int> getAndroidSdkInt() {
+    throw UnimplementedError('getAndroidSdkInt() has not been implemented.');
   }
 
   /// A broadcast stream of native Bluetooth adapter state changes.
@@ -106,6 +114,19 @@ abstract class PrintlyPlatform extends PlatformInterface {
   /// a no-op in that case.
   Future<void> disconnect({required PrintlyDevice device}) {
     throw UnimplementedError('disconnect() has not been implemented.');
+  }
+
+  /// Writes [bytes] to the open link to [device].
+  ///
+  /// The future completes once the native stack has handed the payload to the
+  /// transport (RFCOMM `OutputStream` flush, or the final GATT characteristic
+  /// write acknowledgement), or rejects with a [PlatformException] when no link
+  /// is open, the link is not yet ready for writes, or the transport fails.
+  Future<void> write({
+    required PrintlyDevice device,
+    required Uint8List bytes,
+  }) {
+    throw UnimplementedError('write() has not been implemented.');
   }
 
   /// Broadcast stream of native connection state changes. Each event carries

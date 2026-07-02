@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:printly/printly.dart';
@@ -58,7 +59,11 @@ void main() {
 
   setUp(() {
     platform = _FakePlatform();
-    controller = ScanController(platform: platform);
+    // Zero interval → emit immediately, so discovery assertions are synchronous.
+    controller = ScanController(
+      platform: platform,
+      emitInterval: Duration.zero,
+    );
   });
 
   tearDown(() async {
@@ -99,6 +104,64 @@ void main() {
       expect(identical(a, b), isTrue);
       await Future.wait(<Future<void>>[a, b]);
       expect(platform.stopScanCalls, 1);
+    });
+
+    test('startScan issued while a stopScan is in flight restarts', () async {
+      await controller.startScan();
+      // The natural "rescan" gesture: stop and start without awaiting.
+      final Future<void> stop = controller.stopScan();
+      final Future<void> restart = controller.startScan();
+      await Future.wait(<Future<void>>[stop, restart]);
+
+      expect(platform.stopScanCalls, 1);
+      expect(platform.startScanCalls, 2);
+      expect(controller.isScanning, isTrue);
+    });
+
+    test('restart queued behind a stop is shared by duplicate taps', () async {
+      await controller.startScan();
+      unawaited(controller.stopScan());
+      final Future<void> first = controller.startScan();
+      final Future<void> second = controller.startScan();
+      expect(identical(first, second), isTrue);
+      await first;
+      expect(platform.startScanCalls, 2);
+    });
+  });
+
+  group('mid-scan errors', () {
+    test(
+      'a native stream error surfaces on scanErrors and stops the scan',
+      () async {
+        await controller.startScan();
+        expect(controller.isScanning, isTrue);
+
+        final Future<PrintlyException> firstError = controller.scanErrors.first;
+        platform._resultsController.addError(
+          PlatformException(
+            code: 'start_scan_failed',
+            message: 'bluetooth_not_powered_on',
+          ),
+        );
+        final PrintlyException error = await firstError;
+
+        expect(error, isA<PrintlyScanException>());
+        expect(error.code, PrintlyErrorCode.bluetoothNotPoweredOn);
+        expect(controller.isScanning, isFalse);
+      },
+    );
+
+    test('the controller keeps working after a stream error', () async {
+      await controller.startScan();
+      platform._resultsController.addError(
+        PlatformException(code: 'start_scan_failed'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.isScanning, isFalse);
+
+      await controller.startScan();
+      expect(controller.isScanning, isTrue);
+      expect(platform.startScanCalls, 2);
     });
   });
 
@@ -209,6 +272,32 @@ void main() {
         types: const <ConnectionType>{ConnectionType.ble},
       );
       expect(platform.lastTypes, <ConnectionType>{ConnectionType.ble});
+    });
+  });
+
+  group('emission coalescing', () {
+    test('collapses a burst of advertisements into one emission', () async {
+      final ScanController coalesced = ScanController(
+        platform: platform,
+        emitInterval: const Duration(milliseconds: 50),
+      );
+      final List<int> lengths = <int>[];
+      final StreamSubscription<List<PrintlyDevice>> sub = coalesced
+          .devicesStream
+          .listen((List<PrintlyDevice> list) => lengths.add(list.length));
+      await Future<void>.delayed(Duration.zero); // seeded empty emission
+
+      for (int i = 0; i < 10; i++) {
+        platform.emit(PrintlyDevice(address: 'D$i', type: ConnectionType.ble));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+
+      // All 10 devices land, but the burst collapses to a single update.
+      expect(lengths.last, 10);
+      expect(lengths.length, lessThan(5));
+
+      await sub.cancel();
+      await coalesced.dispose();
     });
   });
 }

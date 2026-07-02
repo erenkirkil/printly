@@ -10,15 +10,42 @@ import CoreBluetooth
 /// rather than hanging silently.
 final class ConnectionCoordinator {
 
+    /// Mirrors Android's `GATT_DISCONNECT_TIMEOUT_MS`: if CoreBluetooth never
+    /// delivers `didDisconnect` after a cancel, force-reap the entry so the
+    /// Dart side cannot wedge in `disconnecting`.
+    private static let disconnectFallback: DispatchTimeInterval = .seconds(4)
+
     private let central: CentralController
     private let events: ConnectionEventsStreamHandler
 
-    private struct Entry {
+    /// A class (not a struct) on purpose: the timeout and fallback reapers
+    /// guard on the stored instance's identity (`===`) so a stale work item
+    /// can never act on a fresh reconnect entry for the same UUID.
+    private final class Entry {
         let payload: [String: Any]
         let peripheral: CBPeripheral
+        var connectTimeout: DispatchWorkItem?
+        var disconnectFallback: DispatchWorkItem?
+
+        init(payload: [String: Any], peripheral: CBPeripheral) {
+            self.payload = payload
+            self.peripheral = peripheral
+        }
+
+        func cancelTimers() {
+            connectTimeout?.cancel()
+            connectTimeout = nil
+            disconnectFallback?.cancel()
+            disconnectFallback = nil
+        }
     }
 
     private var entries: [UUID: Entry] = [:]
+
+    /// UUIDs with a live connection entry — the peripherals the scan cache
+    /// must keep retaining across a prune (CoreBluetooth drops connections
+    /// whose CBPeripheral is deallocated).
+    var liveUUIDs: Set<UUID> { Set(entries.keys) }
 
     init(central: CentralController, events: ConnectionEventsStreamHandler) {
         self.central = central
@@ -26,92 +53,161 @@ final class ConnectionCoordinator {
     }
 
     func connect(payload: [String: Any], timeoutMs: Int?) {
-        guard let type = payload["type"] as? Int else {
-            emit(payload: payload, state: WireCodes.stateError, failureReason: "invalid_payload")
+        guard let type = payload[WireCodes.Keys.type] as? Int else {
+            emit(payload: payload, state: WireCodes.stateError,
+                 failureReason: WireCodes.Reasons.invalidPayload)
             return
         }
-        guard let address = payload["address"] as? String else {
-            emit(payload: payload, state: WireCodes.stateError, failureReason: "invalid_payload")
+        guard let address = payload[WireCodes.Keys.address] as? String else {
+            emit(payload: payload, state: WireCodes.stateError,
+                 failureReason: WireCodes.Reasons.invalidPayload)
             return
         }
 
         switch type {
         case WireCodes.typeClassic:
-            emit(payload: payload, state: WireCodes.stateError, failureReason: "classic_requires_mfi")
+            emit(payload: payload, state: WireCodes.stateError,
+                 failureReason: WireCodes.Reasons.classicRequiresMfi)
             return
         case WireCodes.typeNetwork:
-            emit(payload: payload, state: WireCodes.stateError, failureReason: "network_not_supported")
+            emit(payload: payload, state: WireCodes.stateError,
+                 failureReason: WireCodes.Reasons.networkNotSupported)
             return
         case WireCodes.typeBle:
             break
         default:
-            emit(payload: payload, state: WireCodes.stateError, failureReason: "unsupported_transport")
+            emit(payload: payload, state: WireCodes.stateError,
+                 failureReason: WireCodes.Reasons.unsupportedTransport)
             return
         }
 
         guard let uuid = UUID(uuidString: address) else {
-            emit(payload: payload, state: WireCodes.stateError, failureReason: "invalid_address")
+            emit(payload: payload, state: WireCodes.stateError,
+                 failureReason: WireCodes.Reasons.invalidAddress)
             return
         }
 
-        let manager = central.ensureManager()
-        guard manager.state == .poweredOn else {
-            emit(payload: payload, state: WireCodes.stateError, failureReason: "bluetooth_not_powered_on")
-            return
-        }
+        if reemitIfDuplicate(uuid: uuid) { return }
 
-        if entries[uuid] != nil {
-            // Duplicate call — Dart layer de-dups, this is just defence in
-            // depth. Do not open a second connect attempt.
-            return
+        // Routed through the poweredOn queue: the manager is `.unknown`
+        // right after lazy creation, so a synchronous state guard would
+        // deterministically fail a cold-start connect (the documented
+        // `reconnectLastDevice()` flow). Terminal non-on states map to the
+        // shared reason vocabulary.
+        central.onPoweredOn { [weak self] outcome in
+            guard let self = self else { return }
+            if case .failure(let error) = outcome {
+                self.emit(payload: payload, state: WireCodes.stateError,
+                          failureReason: error.reason)
+                return
+            }
+            self.startBleConnect(payload: payload, uuid: uuid, timeoutMs: timeoutMs)
         }
+    }
+
+    /// When an entry already exists (typically a Flutter hot restart: the
+    /// native process and its live link survive while the Dart side starts
+    /// fresh), mirror Android and re-emit the current effective state so the
+    /// restarted Dart side rehydrates instead of hanging into its connect
+    /// timeout. Returns `true` when a duplicate was handled.
+    private func reemitIfDuplicate(uuid: UUID) -> Bool {
+        guard let existing = entries[uuid] else { return false }
+        let state = existing.peripheral.state == .connected
+            ? WireCodes.stateConnected
+            : WireCodes.stateConnecting
+        emit(payload: existing.payload, state: state, failureReason: nil)
+        return true
+    }
+
+    private func startBleConnect(payload: [String: Any], uuid: UUID, timeoutMs: Int?) {
+        // Re-check after the (possibly async) poweredOn hop: two queued
+        // connects for the same UUID must not open a second attempt.
+        if reemitIfDuplicate(uuid: uuid) { return }
 
         guard let peripheral = central.peripheral(for: uuid) else {
-            emit(payload: payload, state: WireCodes.stateError, failureReason: "peripheral_unknown")
+            emit(payload: payload, state: WireCodes.stateError,
+                 failureReason: WireCodes.Reasons.peripheralUnknown)
             return
         }
 
-        entries[uuid] = Entry(payload: payload, peripheral: peripheral)
+        let entry = Entry(payload: payload, peripheral: peripheral)
+        entries[uuid] = entry
         emit(payload: payload, state: WireCodes.stateConnecting, failureReason: nil)
 
         // CBCentralManager.connect has no built-in timeout. Schedule a
-        // cancelPeripheralConnection after the requested interval so a
-        // stalled connect does not hang forever.
+        // cancellable work item so a stalled connect does not hang forever.
+        // It is cancelled on every resolution path (didConnect,
+        // didFailToConnect, didDisconnect, disconnect, detach) and guarded
+        // by entry identity, so it can never kill a later attempt to the
+        // same UUID.
         if let timeoutMs = timeoutMs, timeoutMs > 0 {
-            let deadline = DispatchTime.now() + .milliseconds(timeoutMs)
-            DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
-                guard let self = self, let entry = self.entries[uuid] else { return }
-                if entry.peripheral.state != .connected {
-                    manager.cancelPeripheralConnection(entry.peripheral)
-                    self.entries.removeValue(forKey: uuid)
-                    self.emit(
-                        payload: entry.payload,
-                        state: WireCodes.stateError,
-                        failureReason: "connect_timeout"
-                    )
-                }
+            let work = DispatchWorkItem { [weak self, weak entry] in
+                guard let self = self, let entry = entry,
+                      self.entries[uuid] === entry,
+                      entry.peripheral.state != .connected else { return }
+                self.central.ensureManager().cancelPeripheralConnection(entry.peripheral)
+                self.entries.removeValue(forKey: uuid)
+                self.emit(
+                    payload: entry.payload,
+                    state: WireCodes.stateError,
+                    failureReason: WireCodes.Reasons.connectTimeout
+                )
             }
+            entry.connectTimeout = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + .milliseconds(timeoutMs),
+                execute: work
+            )
         }
 
-        manager.connect(peripheral, options: nil)
+        central.ensureManager().connect(peripheral, options: nil)
     }
 
     func disconnect(payload: [String: Any]) {
-        guard let address = payload["address"] as? String,
+        guard let address = payload[WireCodes.Keys.address] as? String,
               let uuid = UUID(uuidString: address),
               let entry = entries[uuid] else {
             emit(payload: payload, state: WireCodes.stateDisconnected, failureReason: nil)
             return
         }
+
         emit(payload: entry.payload, state: WireCodes.stateDisconnecting, failureReason: nil)
-        central.ensureManager().cancelPeripheralConnection(entry.peripheral)
-        // The final `disconnected` state is emitted from the delegate
-        // callback in didDisconnect below.
+        entry.cancelTimers()
+        let manager = central.ensureManager()
+
+        guard entry.peripheral.state == .connected else {
+            // Cancelling a still-pending connect is not guaranteed to invoke
+            // any delegate callback (a long-standing CoreBluetooth gap), so
+            // reap the entry and emit the terminal state synchronously.
+            entries.removeValue(forKey: uuid)
+            manager.cancelPeripheralConnection(entry.peripheral)
+            emit(payload: entry.payload, state: WireCodes.stateDisconnected, failureReason: nil)
+            return
+        }
+
+        // Established link: didDisconnect normally emits the terminal state.
+        // Mirror Android's 4 s fallback reaper in case the callback never
+        // arrives; the identity guard (`===`) makes it a no-op if a fresh
+        // reconnect entry has replaced this one in the meantime.
+        let fallback = DispatchWorkItem { [weak self, weak entry] in
+            guard let self = self, let entry = entry,
+                  self.entries[uuid] === entry else { return }
+            self.entries.removeValue(forKey: uuid)
+            self.emit(payload: entry.payload, state: WireCodes.stateDisconnected, failureReason: nil)
+        }
+        entry.disconnectFallback = fallback
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.disconnectFallback,
+            execute: fallback
+        )
+        manager.cancelPeripheralConnection(entry.peripheral)
     }
 
     func detach() {
+        guard !entries.isEmpty else { return }
         let manager = central.ensureManager()
         for (_, entry) in entries {
+            entry.cancelTimers()
             manager.cancelPeripheralConnection(entry.peripheral)
         }
         entries.removeAll()
@@ -121,22 +217,31 @@ final class ConnectionCoordinator {
 
     func didConnect(peripheral: CBPeripheral) {
         guard let entry = entries[peripheral.identifier] else { return }
+        entry.connectTimeout?.cancel()
+        entry.connectTimeout = nil
+        // Sprint 6 note: once iOS writes are implemented, this emit must
+        // move to after service discovery + write-characteristic resolution
+        // to preserve wire-state semantics with Android, where `connected`
+        // means ready-to-print.
         emit(payload: entry.payload, state: WireCodes.stateConnected, failureReason: nil)
     }
 
     func didFailToConnect(peripheral: CBPeripheral, error: Error?) {
         guard let entry = entries.removeValue(forKey: peripheral.identifier) else { return }
+        entry.cancelTimers()
         emit(
             payload: entry.payload,
             state: WireCodes.stateError,
-            failureReason: error?.localizedDescription ?? "connect_failed"
+            failureReason: error?.localizedDescription ?? WireCodes.Reasons.connectFailed
         )
     }
 
     func didDisconnect(peripheral: CBPeripheral, error: Error?) {
         guard let entry = entries.removeValue(forKey: peripheral.identifier) else { return }
+        entry.cancelTimers()
         if let error = error {
-            emit(payload: entry.payload, state: WireCodes.stateError, failureReason: error.localizedDescription)
+            emit(payload: entry.payload, state: WireCodes.stateError,
+                 failureReason: error.localizedDescription)
         } else {
             emit(payload: entry.payload, state: WireCodes.stateDisconnected, failureReason: nil)
         }
@@ -144,11 +249,11 @@ final class ConnectionCoordinator {
 
     private func emit(payload: [String: Any], state: Int, failureReason: String?) {
         var map: [String: Any] = [
-            "device": payload,
-            "state": state,
+            WireCodes.Keys.device: payload,
+            WireCodes.Keys.state: state,
         ]
         if let reason = failureReason {
-            map["failureReason"] = reason
+            map[WireCodes.Keys.failureReason] = reason
         }
         events.emit(map)
     }

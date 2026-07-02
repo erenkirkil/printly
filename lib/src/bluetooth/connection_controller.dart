@@ -5,6 +5,7 @@ import 'package:rxdart/rxdart.dart';
 import '../core/connection_event.dart';
 import '../core/connection_state.dart';
 import '../core/printly_device.dart';
+import '../core/printly_exception.dart';
 import '../platform/printly_platform_interface.dart';
 
 /// Default timeout handed to [ConnectionController.connect] when the caller
@@ -43,7 +44,8 @@ class ConnectionController {
       <String, BehaviorSubject<ConnectionState>>{};
   final Map<String, PrintlyDevice> _knownDevices = <String, PrintlyDevice>{};
   final Map<String, String?> _lastFailureReasons = <String, String?>{};
-  final Map<String, Future<void>> _pendingConnects = <String, Future<void>>{};
+  final Map<String, _PendingConnect> _pendingConnects =
+      <String, _PendingConnect>{};
   final Map<String, Future<void>> _pendingDisconnects =
       <String, Future<void>>{};
 
@@ -78,9 +80,17 @@ class ConnectionController {
 
   /// Opens a link to [device].
   ///
+  /// The returned future resolves only when the native side reports a terminal
+  /// [ConnectionState] for [device] — it completes on
+  /// [ConnectionState.connected] and completes with an error on
+  /// [ConnectionState.error]/[ConnectionState.disconnected] or when [timeout]
+  /// elapses. So `await connect()` genuinely means "connected", not merely
+  /// "the request was dispatched".
+  ///
   /// * If already connected to [device] → returns immediately.
   /// * If a connect attempt is in flight for [device] → returns the same
-  ///   future (re-entrancy safe).
+  ///   future (re-entrancy safe), so duplicate taps never start a second
+  ///   native attempt.
   /// * If a different device is currently connected → disconnects it first,
   ///   then connects to [device] (serialised).
   Future<void> connect(
@@ -90,18 +100,34 @@ class ConnectionController {
     _assertNotDisposed();
     final String key = device.dedupKey;
 
-    final Future<void>? pending = _pendingConnects[key];
-    if (pending != null) return pending;
+    final _PendingConnect? pending = _pendingConnects[key];
+    if (pending != null) return pending.completer.future;
     if (stateOf(device) == ConnectionState.connected) {
       return Future<void>.value();
     }
 
-    final Future<void> future = _runConnect(device, timeout);
-    _pendingConnects[key] = future;
-    return future;
+    final Completer<void> completer = Completer<void>();
+    final Timer timer = Timer(timeout, () {
+      _lastFailureReasons[key] = PrintlyErrorCode.connectTimeout.wireName;
+      _emitLocal(device, ConnectionState.error);
+      _resolvePendingConnect(key, PrintlyConnectionTimeoutException(timeout));
+    });
+    // `disconnect(); connect(device);` without awaiting: the old link's
+    // terminal `disconnected` event is still on its way and must not be
+    // mistaken for this fresh attempt failing.
+    final bool teardownInFlight =
+        _pendingDisconnects.containsKey(key) ||
+        stateOf(device) == ConnectionState.disconnecting;
+    _pendingConnects[key] = _PendingConnect(
+      completer,
+      timer,
+      ignoreNextDisconnect: teardownInFlight,
+    );
+    unawaited(_startConnect(device, timeout));
+    return completer.future;
   }
 
-  Future<void> _runConnect(PrintlyDevice device, Duration timeout) async {
+  Future<void> _startConnect(PrintlyDevice device, Duration timeout) async {
     final String key = device.dedupKey;
     try {
       final PrintlyDevice? previous = activeDevice;
@@ -111,13 +137,26 @@ class ConnectionController {
       _knownDevices[key] = device;
       _lastFailureReasons[key] = null;
       _emitLocal(device, ConnectionState.connecting);
+      // The native call returns as soon as the request is dispatched; the real
+      // outcome arrives asynchronously via [connectionEvents] and resolves the
+      // pending connect in [_onConnectionEvent] (or the timeout above fires).
       await _platform.connect(device: device, timeout: timeout);
     } catch (error) {
       _lastFailureReasons[key] = error.toString();
       _emitLocal(device, ConnectionState.error);
-      rethrow;
-    } finally {
-      unawaited(_pendingConnects.remove(key));
+      _resolvePendingConnect(key, error);
+    }
+  }
+
+  void _resolvePendingConnect(String key, Object? error) {
+    final _PendingConnect? pending = _pendingConnects.remove(key);
+    if (pending == null) return;
+    pending.timer.cancel();
+    if (pending.completer.isCompleted) return;
+    if (error == null) {
+      pending.completer.complete();
+    } else {
+      pending.completer.completeError(error);
     }
   }
 
@@ -168,13 +207,58 @@ class ConnectionController {
 
   void _onConnectionEvent(PrintlyConnectionEvent event) {
     if (_disposed) return;
-    _knownDevices[event.device.dedupKey] = event.device;
+    final String key = event.device.dedupKey;
+
+    // Terminal event of the *previous* link during a disconnect-then-connect
+    // sequence: swallow it entirely so it neither rejects the fresh connect
+    // nor flips the public state away from `connecting`.
+    final _PendingConnect? pendingForKey = _pendingConnects[key];
+    if (event.state == ConnectionState.disconnected &&
+        pendingForKey != null &&
+        pendingForKey.ignoreNextDisconnect) {
+      pendingForKey.ignoreNextDisconnect = false;
+      return;
+    }
+
+    _knownDevices[key] = event.device;
     if (event.state == ConnectionState.error) {
-      _lastFailureReasons[event.device.dedupKey] = event.failureReason;
+      _lastFailureReasons[key] = event.failureReason;
     } else if (event.state == ConnectionState.connected) {
-      _lastFailureReasons[event.device.dedupKey] = null;
+      _lastFailureReasons[key] = null;
     }
     _emitLocal(event.device, event.state);
+
+    // Resolve an in-flight connect() when the native side reaches a terminal
+    // state (a no-op when nothing is pending for this device).
+    switch (event.state) {
+      case ConnectionState.connected:
+        _resolvePendingConnect(key, null);
+      case ConnectionState.error:
+        final PrintlyErrorCode code = PrintlyErrorCode.fromWireName(
+          event.failureReason,
+        );
+        _resolvePendingConnect(
+          key,
+          PrintlyConnectionException(
+            code == PrintlyErrorCode.unknown
+                ? PrintlyErrorCode.connectFailed
+                : code,
+            event.failureReason ?? PrintlyErrorCode.connectFailed.wireName,
+          ),
+        );
+      case ConnectionState.disconnected:
+        _resolvePendingConnect(
+          key,
+          const PrintlyConnectionException(
+            PrintlyErrorCode.disconnected,
+            'disconnected before connect completed',
+          ),
+        );
+      case ConnectionState.connecting:
+      case ConnectionState.disconnecting:
+      case ConnectionState.reconnecting:
+        break;
+    }
   }
 
   void _onConnectionEventError(Object error, StackTrace stack) {
@@ -223,12 +307,33 @@ class ConnectionController {
     _disposed = true;
     await _eventsSubscription?.cancel();
     _eventsSubscription = null;
+    for (final _PendingConnect pending in _pendingConnects.values) {
+      pending.timer.cancel();
+    }
+    _pendingConnects.clear();
     await _activeDeviceSubject.close();
     for (final BehaviorSubject<ConnectionState> subject in _states.values) {
       await subject.close();
     }
     _states.clear();
-    _pendingConnects.clear();
     _pendingDisconnects.clear();
   }
+}
+
+/// A connect attempt awaiting its terminal [ConnectionState], guarded by a
+/// [timer] that fails the attempt if the native side never reports back.
+class _PendingConnect {
+  _PendingConnect(
+    this.completer,
+    this.timer, {
+    this.ignoreNextDisconnect = false,
+  });
+
+  final Completer<void> completer;
+  final Timer timer;
+
+  /// Set when the attempt was started while the same device was still
+  /// tearing down: the next `disconnected` event belongs to the old link
+  /// and is ignored once.
+  bool ignoreNextDisconnect;
 }

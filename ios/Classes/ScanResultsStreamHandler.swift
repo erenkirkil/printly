@@ -34,26 +34,49 @@ final class ScanResultsStreamHandler: NSObject, FlutterStreamHandler {
         return nil
     }
 
-    func start(types: [Int]) throws {
+    /// Starts a BLE scan once the central manager reports `.poweredOn`.
+    ///
+    /// Routed through `CentralController.onPoweredOn` instead of a
+    /// synchronous state guard: the manager is `.unknown` right after lazy
+    /// creation, so a synchronous check would deterministically fail the
+    /// very first `startScan()` even with Bluetooth on. Terminal non-on
+    /// states fail with the mapped reason (`.unauthorized` surfaces as
+    /// `permission_denied`, matching Android).
+    func start(
+        types: [Int],
+        completion: @escaping (Result<Void, PrintlyError>) -> Void
+    ) {
         guard types.contains(WireCodes.typeBle) else {
             // No BLE requested — nothing iOS can do (MFi Classic is out of
             // scope for Sprint 3).
+            completion(.success(()))
             return
         }
-        let manager = central.ensureManager()
-        guard manager.state == .poweredOn else {
-            throw NSError(
-                domain: "printly",
-                code: WireCodes.stateError,
-                userInfo: [NSLocalizedDescriptionKey: "bluetooth_not_powered_on"]
-            )
+        central.onPoweredOn { [weak self] outcome in
+            guard let self = self else {
+                // Handler torn down while queued — the engine is gone, so
+                // nobody meaningfully observes this result.
+                completion(.failure(.bluetoothUnavailable))
+                return
+            }
+            switch outcome {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success:
+                if !self.scanning {
+                    // A new scan invalidates the previous environment — drop
+                    // cached peripherals nothing is connected to so the cache
+                    // cannot grow without bound.
+                    self.central.pruneDiscovered()
+                    self.central.ensureManager().scanForPeripherals(
+                        withServices: nil,
+                        options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
+                    )
+                    self.scanning = true
+                }
+                completion(.success(()))
+            }
         }
-        if scanning { return }
-        manager.scanForPeripherals(
-            withServices: nil,
-            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
-        )
-        scanning = true
     }
 
     func stop() {
@@ -74,17 +97,17 @@ final class ScanResultsStreamHandler: NSObject, FlutterStreamHandler {
     ) {
         guard let sink = sink else { return }
         var map: [String: Any] = [
-            "address": peripheral.identifier.uuidString,
-            "type": WireCodes.typeBle,
-            "rssi": rssi,
+            WireCodes.Keys.address: peripheral.identifier.uuidString,
+            WireCodes.Keys.type: WireCodes.typeBle,
+            WireCodes.Keys.rssi: rssi,
             // iOS has no OS-level "bonded" concept comparable to Android's
             // BOND_BONDED; expose false so the Dart layer has a consistent
             // field to read.
-            "isBonded": false,
+            WireCodes.Keys.isBonded: false,
         ]
         let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         if let name = peripheral.name ?? advertisedName {
-            map["name"] = name
+            map[WireCodes.Keys.name] = name
         }
         sink(map)
     }

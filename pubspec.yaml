@@ -1,5 +1,5 @@
 name: printly
-description: "Production-grade thermal printer SDK for Flutter. Bluetooth Classic, BLE, Ethernet/WiFi, ESC/POS, Turkish charset, built-in permission management."
+description: "Thermal printer SDK for Flutter. Bluetooth Classic + BLE, ESC/POS receipts (text, barcode, QR), Turkish charset (CP857), typed errors, built-in permission flow."
 version: 0.1.0-dev
 homepage: https://github.com/erenkirkil/printly
 repository: https://github.com/erenkirkil/printly
@@ -13,14 +13,15 @@ topics:
 
 environment:
   sdk: ^3.9.2
-  flutter: ">=3.24.0"
+  # Flutter 3.35 is the first release that bundles Dart 3.9; a lower bound
+  # here would advertise SDKs the Dart constraint above cannot resolve on.
+  flutter: ">=3.35.0"
 
 dependencies:
   flutter:
     sdk: flutter
   plugin_platform_interface: ^2.1.8
   esc_pos_utils_plus: ^2.0.4
-  image: ^4.8.0
   permission_handler: ^12.0.1
   rxdart: ^0.28.0
   shared_preferences: ^2.5.5
@@ -29,8 +30,6 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  mockito: ^5.6.4
-  build_runner: ^2.13.1
 
 flutter:
   plugin:

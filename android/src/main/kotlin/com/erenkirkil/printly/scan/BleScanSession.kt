@@ -20,6 +20,7 @@ import com.erenkirkil.printly.util.WireCodes
 internal class BleScanSession(
     adapter: BluetoothAdapter,
     private val onDevice: (Map<String, Any?>) -> Unit,
+    private val onError: (Int) -> Unit = {},
 ) {
     private val scanner: BluetoothLeScanner? = adapter.bluetoothLeScanner
     private var callback: ScanCallback? = null
@@ -35,7 +36,10 @@ internal class BleScanSession(
                 results.forEach(::emit)
             }
             override fun onScanFailed(errorCode: Int) {
-                // Upper layer times out or the user retries; we drop silently.
+                // Surface the failure so the upper layer can stop the spinner
+                // and report it, instead of the user waiting out the timeout.
+                // (Android throttles opportunistic scans after 5 starts / 30 s.)
+                onError(errorCode)
             }
         }
         callback = cb
@@ -66,11 +70,11 @@ internal class BleScanSession(
             device.bondState == BluetoothDevice.BOND_BONDED
         } catch (_: SecurityException) { false }
         onDevice(buildMap {
-            put("address", device.address)
-            put("type", WireCodes.TYPE_BLE)
-            if (name != null) put("name", name)
-            put("rssi", result.rssi)
-            put("isBonded", bonded)
+            put(WireCodes.Keys.ADDRESS, device.address)
+            put(WireCodes.Keys.TYPE, WireCodes.TYPE_BLE)
+            if (name != null) put(WireCodes.Keys.NAME, name)
+            put(WireCodes.Keys.RSSI, result.rssi)
+            put(WireCodes.Keys.IS_BONDED, bonded)
         })
     }
 }
