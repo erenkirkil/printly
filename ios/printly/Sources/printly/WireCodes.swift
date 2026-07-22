@@ -108,6 +108,8 @@ extension WireCodes {
         static let invalidPayload = "invalid_payload"
         static let invalidAddress = "invalid_address"
         static let unsupportedTransport = "unsupported_transport"
+        static let serviceDiscoveryFailed = "service_discovery_failed"
+        static let noWritableCharacteristic = "no_writable_characteristic"
     }
 }
 

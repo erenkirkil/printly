@@ -5,8 +5,9 @@ Thermal printer SDK for Flutter. Bluetooth Classic + BLE, ESC/POS receipts
 permission flow — in one self-contained plugin with no opaque vendor SDKs.
 
 > 🚧 **Under active development.** Targeting a `v0.1.0` release on pub.dev at
-> the end of Sprint 6. Network (Ethernet/WiFi) printing and a raster
-> (widget → image) pipeline are planned for the releases after that.
+> the end of Sprint 6. The raster (widget → image) pipeline ships before
+> `v0.1.0`; network (Ethernet/WiFi) printing is planned for the releases
+> after that.
 
 ## Why another printer package?
 
@@ -110,8 +111,25 @@ No manifest changes needed — the plugin declares the Bluetooth permissions
 
 3. iOS limitations: Bluetooth **Classic** requires MFi certification, so
    Classic printers are Android-only (`PrintlyErrorCode.classicRequiresMfi`);
-   use the BLE transport on iOS. ESC/POS write on iOS lands in Sprint 6 —
-   until then `print()` rejects with `PrintlyErrorCode.unsupportedPlatform`.
+   use the BLE transport on iOS. Most cheap 58 mm printers are dual-mode —
+   they appear as Classic on Android and expose a BLE mode that iOS can see.
+
+## Ecosystem readiness
+
+Because printly is a *package*, it has to be ready for platform transitions
+before the apps that depend on it:
+
+- **Swift Package Manager** — the iOS sources ship with both a
+  `Package.swift` (used automatically by Flutter 3.44+, where SPM is the
+  default) and a `.podspec`, so CocoaPods-based apps keep working
+  unchanged during the transition.
+- **Android 16 KB page sizes** — printly's Android side is pure Kotlin and
+  ships **no native (`.so`) binaries**, so the plugin itself is 16 KB
+  compatible as-is (Google Play requires 16 KB support for new apps and
+  updates targeting Android 15+ since November 1st, 2025). Your app's
+  overall compatibility is determined by your Flutter version and other
+  plugins; verify a release build with
+  `zipalign -c -P 16 -v 4 app-release.apk`.
 
 ## Status
 
@@ -120,9 +138,12 @@ No manifest changes needed — the plugin declares the Bluetooth permissions
 | 1 | Foundation & scaffold | ✅ done |
 | 2 | Bluetooth state & permissions | ✅ done |
 | 3 | Device discovery & connection | ✅ done |
-| 4 | ESC/POS core & Turkish charset | 🔨 in progress |
-| 5 | Raster & network printing | pending |
-| 6 | iOS write path, docs & release | pending |
+| 4 | ESC/POS core & Turkish charset | ✅ done |
+| 5 | iOS Bluetooth print, SPM & 16 KB readiness | 🔨 in progress |
+| 6 | Raster pipeline, docs & release | pending |
+
+Network (Ethernet/WiFi) printing moved out of the `v0.1.0` scope and is
+planned for a follow-up release.
 
 ## Tested hardware
 

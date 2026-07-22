@@ -7,16 +7,19 @@ Pod::Spec.new do |s|
   s.version          = '0.1.0'
   s.summary          = 'Thermal printer SDK for Flutter.'
   s.description      = <<-DESC
-Thermal printer SDK for Flutter. On iOS this pod provides BLE scanning and
-connection via CoreBluetooth; ESC/POS printing and the network (TCP/9100)
-transport are in progress. Bluetooth Classic is Android-only, because iOS
-requires MFi certification for Classic SPP devices.
+Thermal printer SDK for Flutter. On iOS this pod provides BLE scanning,
+connection, and ESC/POS printing via CoreBluetooth. Bluetooth Classic is
+Android-only, because iOS requires MFi certification for Classic SPP
+devices; the network (TCP/9100) transport is planned post-v1.
                        DESC
   s.homepage         = 'https://github.com/erenkirkil/printly'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Eren Kırkıl' => 'erenkirkil@gmail.com' }
   s.source           = { :path => '.' }
-  s.source_files = 'Classes/**/*'
+  # Sources live in the Swift Package Manager layout (ios/printly/Sources)
+  # and are shared by both manifests: Package.swift for SPM consumers, this
+  # podspec for CocoaPods consumers during the transition period.
+  s.source_files = 'printly/Sources/printly/**/*.swift'
   s.dependency 'Flutter'
   s.platform = :ios, '13.0'
 
@@ -28,5 +31,5 @@ requires MFi certification for Classic SPP devices.
   # required reason APIs, update the PrivacyInfo.xcprivacy file to describe your
   # plugin's privacy impact, and then uncomment this line. For more information,
   # see https://developer.apple.com/documentation/bundleresources/privacy_manifest_files
-  # s.resource_bundles = {'printly_privacy' => ['Resources/PrivacyInfo.xcprivacy']}
+  # s.resource_bundles = {'printly_privacy' => ['printly/Sources/printly/PrivacyInfo.xcprivacy']}
 end

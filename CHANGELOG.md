@@ -2,6 +2,35 @@
 
 Initial release preparation.
 
+### Sprint 5 — iOS Bluetooth print & platform readiness (2026-07-02)
+
+#### Added
+
+- **iOS ESC/POS printing over BLE.** `print()`/`write()` now works on iOS:
+  after the link comes up, printly discovers services, resolves the write
+  characteristic (same preference order as Android: `FF02`,
+  `49535343-8841-…`, `FFE1`, then any writable), and streams the job in
+  single-ATT-packet chunks bounded by a 5 s per-chunk watchdog. The
+  `connected` state now means *ready-to-print* on iOS exactly as it does on
+  Android — it is emitted only after the write characteristic is resolved,
+  and the connect timeout covers service discovery too. Error vocabulary is
+  byte-identical with Android (`not_connected`, `not_ready`, `write_busy`,
+  `write_timeout`, `write_failed`).
+- **Swift Package Manager support.** iOS sources moved to the SPM layout
+  (`ios/printly/Sources/printly/`) with a `Package.swift`; Flutter 3.44+
+  resolves the plugin via SPM automatically. The `.podspec` still points at
+  the same sources, so CocoaPods apps are unaffected.
+- **Android 16 KB page-size compatibility** documented: the Android side is
+  pure Kotlin with no bundled native binaries, so the plugin is 16 KB
+  compatible as-is; README explains what consumers need to check.
+
+#### Changed
+
+- Network (Ethernet/WiFi) printing moved out of the `v0.1.0` scope to a
+  post-v1 release; the raster pipeline moved to Sprint 6 (still pre-v1).
+  `PrintlyDevice.network(...)` and `ConnectionType.network` remain in the
+  API and keep rejecting with `network_not_supported`.
+
 ### Hardening & deep-review fixes (2026-07-02)
 
 A six-dimension adversarially-verified code review (69 findings) was applied

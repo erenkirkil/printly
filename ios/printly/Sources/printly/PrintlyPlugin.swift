@@ -134,14 +134,45 @@ public class PrintlyPlugin: NSObject, FlutterPlugin {
     }
 
     private func handleWrite(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        // iOS printing (BLE GATT writes) lands in Sprint 6 alongside the rest
-        // of the CoreBluetooth characteristic work. Reject explicitly so the
-        // public API exists and callers get a clear, actionable error today.
-        result(FlutterError(
-            code: WireCodes.Reasons.unsupportedPlatform,
-            message: "Printing is not yet implemented on iOS (planned for Sprint 6).",
-            details: nil
-        ))
+        guard let args = call.arguments as? [String: Any],
+              let device = args[WireCodes.Keys.device] as? [String: Any] else {
+            result(FlutterError(
+                code: WireCodes.Reasons.invalidArgs,
+                message: "device missing",
+                details: nil
+            ))
+            return
+        }
+        guard let data = args[WireCodes.Keys.bytes] as? FlutterStandardTypedData else {
+            result(FlutterError(
+                code: WireCodes.Reasons.invalidArgs,
+                message: "bytes missing",
+                details: nil
+            ))
+            return
+        }
+        connectionCoordinator.write(payload: device, bytes: data.data) { reason in
+            guard let reason = reason else {
+                result(nil)
+                return
+            }
+            // Pass shared-vocabulary reasons through as their own codes so
+            // Dart can classify them; anything else collapses to the generic
+            // write_failed with the raw reason in the message — byte-for-byte
+            // the same mapping as Android's handleWrite.
+            let code: String
+            switch reason {
+            case WireCodes.Reasons.notConnected,
+                 WireCodes.Reasons.notReady,
+                 WireCodes.Reasons.writeBusy,
+                 WireCodes.Reasons.writeTimeout,
+                 WireCodes.Reasons.disconnected:
+                code = reason
+            default:
+                code = WireCodes.Reasons.writeFailed
+            }
+            result(FlutterError(code: code, message: reason, details: nil))
+        }
     }
 
     private static func openBluetoothSettings() -> Bool {

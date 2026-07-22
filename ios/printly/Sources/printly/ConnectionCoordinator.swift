@@ -2,12 +2,13 @@ import CoreBluetooth
 
 /// Owns the lifecycle of per-peripheral connection attempts and translates
 /// Core Bluetooth delegate events into the shared connection-event wire
-/// format.
+/// format. Post-link work (service discovery, chunked writes) lives in the
+/// per-entry `PeripheralWriteSession`.
 ///
 /// Classic and network transports are rejected on iOS — Classic requires
-/// MFi certification (deferred to Sprint 6) and network is TCP/9100 which
-/// will ship with the network sprint. Both paths emit a structured error
-/// rather than hanging silently.
+/// MFi certification (out of scope for generic thermal printers) and
+/// network is TCP/9100, deferred to post-v1. Both paths emit a structured
+/// error rather than hanging silently.
 final class ConnectionCoordinator {
 
     /// Mirrors Android's `GATT_DISCONNECT_TIMEOUT_MS`: if CoreBluetooth never
@@ -26,6 +27,13 @@ final class ConnectionCoordinator {
         let peripheral: CBPeripheral
         var connectTimeout: DispatchWorkItem?
         var disconnectFallback: DispatchWorkItem?
+        /// Post-link session: service discovery + chunked writes. Created in
+        /// `didConnect`, torn down on every exit path so a pending write can
+        /// never outlive its link.
+        var session: PeripheralWriteSession?
+        /// Ready-to-print (services discovered, write characteristic
+        /// resolved) — the wire meaning of `connected`, matching Android.
+        var ready = false
 
         init(payload: [String: Any], peripheral: CBPeripheral) {
             self.payload = payload
@@ -37,6 +45,12 @@ final class ConnectionCoordinator {
             connectTimeout = nil
             disconnectFallback?.cancel()
             disconnectFallback = nil
+        }
+
+        func teardownSession() {
+            session?.teardown(reason: WireCodes.Reasons.disconnected)
+            session = nil
+            ready = false
         }
     }
 
@@ -112,7 +126,9 @@ final class ConnectionCoordinator {
     /// timeout. Returns `true` when a duplicate was handled.
     private func reemitIfDuplicate(uuid: UUID) -> Bool {
         guard let existing = entries[uuid] else { return false }
-        let state = existing.peripheral.state == .connected
+        // `connected` on the wire means ready-to-print, so a link that is up
+        // but still discovering services re-emits as `connecting`.
+        let state = existing.ready
             ? WireCodes.stateConnected
             : WireCodes.stateConnecting
         emit(payload: existing.payload, state: state, failureReason: nil)
@@ -136,15 +152,16 @@ final class ConnectionCoordinator {
 
         // CBCentralManager.connect has no built-in timeout. Schedule a
         // cancellable work item so a stalled connect does not hang forever.
-        // It is cancelled on every resolution path (didConnect,
-        // didFailToConnect, didDisconnect, disconnect, detach) and guarded
-        // by entry identity, so it can never kill a later attempt to the
-        // same UUID.
+        // It runs through service discovery (Android parity: the connect
+        // attempt only "succeeds" at ready-to-print), is cancelled on every
+        // resolution path and guarded by entry identity, so it can never
+        // kill a later attempt to the same UUID.
         if let timeoutMs = timeoutMs, timeoutMs > 0 {
             let work = DispatchWorkItem { [weak self, weak entry] in
                 guard let self = self, let entry = entry,
                       self.entries[uuid] === entry,
-                      entry.peripheral.state != .connected else { return }
+                      !entry.ready else { return }
+                entry.teardownSession()
                 self.central.ensureManager().cancelPeripheralConnection(entry.peripheral)
                 self.entries.removeValue(forKey: uuid)
                 self.emit(
@@ -173,6 +190,9 @@ final class ConnectionCoordinator {
 
         emit(payload: entry.payload, state: WireCodes.stateDisconnecting, failureReason: nil)
         entry.cancelTimers()
+        // Fail any in-flight write with `disconnected` before the link goes
+        // down, and stop reporting ready so a racing write gets `not_ready`.
+        entry.teardownSession()
         let manager = central.ensureManager()
 
         guard entry.peripheral.state == .connected else {
@@ -208,27 +228,71 @@ final class ConnectionCoordinator {
         let manager = central.ensureManager()
         for (_, entry) in entries {
             entry.cancelTimers()
+            entry.teardownSession()
             manager.cancelPeripheralConnection(entry.peripheral)
         }
         entries.removeAll()
+    }
+
+    /// Routes a print payload to the device's write session. Mirrors
+    /// Android's vocabulary: no live entry → `not_connected`, link up but
+    /// discovery unresolved → `not_ready`; everything past that is the
+    /// session's business (`write_busy`, `write_timeout`, ...). Completion
+    /// receives `nil` on success or the wire reason string.
+    func write(payload: [String: Any], bytes: Data, completion: @escaping (String?) -> Void) {
+        guard let address = payload[WireCodes.Keys.address] as? String,
+              let uuid = UUID(uuidString: address),
+              let entry = entries[uuid] else {
+            completion(WireCodes.Reasons.notConnected)
+            return
+        }
+        guard entry.ready, let session = entry.session else {
+            completion(WireCodes.Reasons.notReady)
+            return
+        }
+        session.write(bytes, completion: completion)
     }
 
     // MARK: - Delegate routed calls
 
     func didConnect(peripheral: CBPeripheral) {
         guard let entry = entries[peripheral.identifier] else { return }
-        entry.connectTimeout?.cancel()
-        entry.connectTimeout = nil
-        // Sprint 6 note: once iOS writes are implemented, this emit must
-        // move to after service discovery + write-characteristic resolution
-        // to preserve wire-state semantics with Android, where `connected`
-        // means ready-to-print.
-        emit(payload: entry.payload, state: WireCodes.stateConnected, failureReason: nil)
+        // The link is up but not yet usable: `connected` is only emitted
+        // once service discovery resolves a writable characteristic (wire
+        // parity with Android, where `connected` means ready-to-print). The
+        // connect timeout therefore keeps running through discovery.
+        let uuid = peripheral.identifier
+        let session = PeripheralWriteSession(peripheral: peripheral)
+        entry.session = session
+        session.prepare(
+            onReady: { [weak self, weak entry] in
+                guard let self = self, let entry = entry,
+                      self.entries[uuid] === entry else { return }
+                entry.ready = true
+                entry.connectTimeout?.cancel()
+                entry.connectTimeout = nil
+                self.emit(payload: entry.payload,
+                          state: WireCodes.stateConnected,
+                          failureReason: nil)
+            },
+            onFailed: { [weak self, weak entry] reason in
+                guard let self = self, let entry = entry,
+                      self.entries[uuid] === entry else { return }
+                entry.cancelTimers()
+                entry.teardownSession()
+                self.entries.removeValue(forKey: uuid)
+                self.central.ensureManager().cancelPeripheralConnection(entry.peripheral)
+                self.emit(payload: entry.payload,
+                          state: WireCodes.stateError,
+                          failureReason: reason)
+            }
+        )
     }
 
     func didFailToConnect(peripheral: CBPeripheral, error: Error?) {
         guard let entry = entries.removeValue(forKey: peripheral.identifier) else { return }
         entry.cancelTimers()
+        entry.teardownSession()
         emit(
             payload: entry.payload,
             state: WireCodes.stateError,
@@ -239,6 +303,7 @@ final class ConnectionCoordinator {
     func didDisconnect(peripheral: CBPeripheral, error: Error?) {
         guard let entry = entries.removeValue(forKey: peripheral.identifier) else { return }
         entry.cancelTimers()
+        entry.teardownSession()
         if let error = error {
             emit(payload: entry.payload, state: WireCodes.stateError,
                  failureReason: error.localizedDescription)
