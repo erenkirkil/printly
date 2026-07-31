@@ -1,6 +1,127 @@
-## 0.1.0-dev
+## 0.1.0 — 2026-07-31
 
-Initial release preparation.
+First release. Bluetooth thermal printing for Flutter, written from scratch in
+Kotlin, Swift and Dart, with Turkish text that works even on printers that
+cannot be told about code pages.
+
+### Bluetooth
+
+- Classic (SPP) and BLE in one plugin — Classic on Android, BLE on both
+  platforms. Network transport is not implemented and is not advertised.
+- `BluetoothAdapterState` as a six-value enum stream, not a bool.
+- Scanning with de-duplication by transport + address, 250 ms emission
+  coalescing, timeouts, and a separate error stream for mid-scan failures.
+- Per-device `ConnectionState` streams plus `activeDeviceStream`. `connected`
+  means *ready to print* — services discovered and a writable characteristic
+  resolved — not merely linked.
+- Runtime permissions (Android 12+ and legacy, iOS) behind
+  `PrintlyPermissionStatus`, with no third-party permission type in the API.
+- Last-device persistence and opt-in auto-reconnect.
+
+### Printing
+
+- Fluent `PrintJob` builder: text, feed, cut, divider, raw bytes, seven barcode
+  symbologies, and QR with automatic module sizing from payload length, error
+  level and paper width.
+- Turkish through code pages: CP857 primary, Windows-1254 and ISO-8859-9
+  fallbacks, byte tables derived from the Unicode Consortium mappings and
+  cross-checked against CPython and libiconv.
+- 58 mm and 80 mm paper, with characters-per-line and dot width derived from
+  the setting rather than hardcoded at call sites.
+
+### Raster — Turkish on any printer
+
+- `PrintlyRaster.text()` draws glyphs with the platform's own text engine and
+  sends dots, so the printer's character set stops mattering. Some printers
+  ignore `ESC t` outright; on those this is the only way to print `ğ` or `İ`.
+- `PrintlyRaster.image()` decodes PNG/JPEG/WebP and fits it to the paper.
+- `PrintlyRaster.widgetKey()` captures a mounted `RepaintBoundary`.
+- `PrintlyBitmap` is immutable, so a logo rendered once is free to reuse; it
+  also keeps `PrintJob.bitmap()` synchronous and chainable.
+- Floyd-Steinberg or plain threshold dithering, emitted as `GS v 0` bands.
+
+### Errors
+
+- Sealed `PrintlyException` hierarchy over a `PrintlyErrorCode` vocabulary
+  shared byte-for-byte between Dart, Kotlin and Swift. A raw `PlatformException`
+  never reaches your code and there is nothing to string-match.
+
+### Platform
+
+- Android: minSdk 24, 16 KB page-size compatible (pure Kotlin, no `.so`).
+- iOS: 13.0+, shipped for both CocoaPods and Swift Package Manager.
+
+### Known limits
+
+- Verified on one printer (Cashino PTP-II). Broader support is the goal, not a
+  claim.
+- Ink coverage is a hardware limit: a broad solid-black area can draw more
+  current than a cheap 5 V head sustains and the printer may cut out with no
+  catchable error. printly reports size and coverage but does not block.
+- Bluetooth Classic gives a whole job a single 10-second write budget on
+  Android; a very long raster receipt can exceed it.
+
+---
+
+## Development log
+
+The sections below record how the package was built, sprint by sprint. They
+are kept for provenance — every entry above is already covered by one of them.
+
+### Sprint 6 — Raster pipeline (2026-07-31)
+
+Turkish text no longer depends on the printer's character set.
+
+#### Added
+
+- **`PrintlyRaster`** — renders to printable dots:
+  - `text()` shapes a string with the platform text engine (wrapping,
+    alignment, weight) — the path that makes Turkish work on printers that
+    ignore `ESC t`.
+  - `image()` decodes PNG/JPEG/WebP and fits it to the paper. `width` is a
+    ceiling, not a stretch: a narrow image keeps its size and the printer
+    centres it rather than being upscaled into a blur.
+  - `repaintBoundary()` / `widgetKey()` capture a mounted, painted
+    `RepaintBoundary`. A widget is not accepted directly because Flutter
+    offers no supported way to render a detached tree — an API that took one
+    would be promising what it cannot do. `Offstage` and zero-opacity
+    subtrees are rejected with an explanation instead of an engine assert.
+- **`PrintlyBitmap`** — an immutable one-bit image, and the seam between the
+  asynchronous rendering half and the synchronous command half. Rendering a
+  logo once and stamping it onto every receipt costs nothing after the first.
+  `toRgba()` expands it back to pixels so a preview can show exactly what the
+  head will burn.
+- **`PrintlyDithering`** — Floyd-Steinberg (a two-row error buffer rather than
+  a full plane: 1.5 KB instead of 1.5 MB for a receipt) or a plain threshold.
+  Two values, not three: a `none` mode would be byte-identical to `threshold`.
+- **`PrintJob.bitmap()`** appends a rendered bitmap synchronously, so it still
+  chains. Alignment goes through the generator's style cache — emitted as raw
+  bytes it would leave the cache stale and the next `text()` would print
+  misaligned. `textRaster()`, `image()` and `widget()` are awaitable sugar over
+  it, typed so a mistaken cascade is a compile error rather than a scrambled
+  receipt.
+- **`PrintConfig.rasterBandHeight`** (default 64 rows). Tall images are split
+  into `GS v 0` bands, each about 3 KB at 58 mm, staying under 256 rows so the
+  command's high height byte is always zero — firmware that ignores that byte
+  is a known hazard.
+
+#### Notes
+
+- The wrapped library's own raster path is not used. For any width that is not
+  already a multiple of 8 it replaces the pixel data with a zero-filled
+  fixed-length list and then calls `insertAll` on it, so it throws before it
+  can print — and derives its header from the unaligned width regardless.
+  printly emits `GS v 0` itself and rounds widths **down** to a multiple of 8,
+  because rounding up would overflow the head and make the printer wrap.
+- Transparent pixels composite to white, not black. `dart:ui` returns
+  premultiplied alpha, so reading the colour channels of a transparent canvas
+  naively yields black — and a receipt-sized black bitmap would burn a roll.
+- Text uses a lighter cutoff (176) than images (128). A font rasteriser
+  antialiases, and at the neutral cutoff only the one-dot core of each stroke
+  burns; thermal heads render isolated dots weakly, so ordinary weights came
+  out washed out while bold looked fine. Measured on paper.
+- Verified end to end on a Cashino PTP-II — the printer that ignores `ESC t`
+  and so could not print Turkish at all before this.
 
 ### Sprint 5 — iOS Bluetooth print & platform readiness (2026-07-02)
 
