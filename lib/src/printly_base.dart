@@ -227,6 +227,14 @@ class Printly {
   /// dropped links) and with a [PrintlyUnsupportedException] for
   /// [ConnectionType.network] devices — the network transport ships in a
   /// later release.
+  ///
+  /// **Stop the scan first if one is running.** An in-flight scan is not
+  /// cancelled here — silently ending something the app started would be a
+  /// surprising side effect, and an app managing several printers may want to
+  /// keep looking. But on Android a radio busy scanning while a GATT link is
+  /// being established is a well-known cause of connection failures, and the
+  /// scan is wasted battery once the printer has been found either way. Call
+  /// [stopScan] before this in the ordinary single-printer case.
   Future<void> connect(
     PrintlyDevice device, {
     Duration timeout = kDefaultConnectTimeout,

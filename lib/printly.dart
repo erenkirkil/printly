@@ -31,3 +31,6 @@ export 'src/print/printly_text_style.dart';
 export 'src/print/qr_sizing.dart';
 export 'src/print/turkish_code_page.dart';
 export 'src/printly_base.dart';
+export 'src/raster/printly_bitmap.dart';
+export 'src/raster/printly_dithering.dart';
+export 'src/raster/printly_raster.dart';

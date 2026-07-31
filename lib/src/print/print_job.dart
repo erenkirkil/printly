@@ -3,7 +3,12 @@ import 'dart:typed_data';
 
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/widgets.dart' show GlobalKey;
 
+import '../raster/printly_bitmap.dart';
+import '../raster/printly_dithering.dart';
+import '../raster/printly_raster.dart';
+import '../raster/raster_encoder.dart';
 import 'print_config.dart';
 import 'printly_barcode_type.dart';
 import 'printly_charset.dart';
@@ -290,6 +295,140 @@ class PrintJob {
       // Function 181: print the stored symbol.
       ..._qrHeader, 0x03, 0x00, 0x31, 0x51, 0x30,
     ];
+  }
+
+  /// Appends an already-rendered [PrintlyBitmap] as a raster image.
+  ///
+  /// Synchronous, so it chains like every other command. Rendering is the
+  /// asynchronous half and happens first, through [PrintlyRaster]:
+  ///
+  /// ```dart
+  /// final header = await PrintlyRaster.text('MAĞAZA', width: 384, bold: true);
+  /// job..bitmap(header)..text('...')..cut();
+  /// ```
+  ///
+  /// Splitting it this way is not only about keeping the cascade. A bitmap is
+  /// immutable, so a logo rendered once at startup can be stamped onto every
+  /// receipt for the rest of the session at no further cost.
+  ///
+  /// [align] positions the block on the paper, which only shows when the bitmap
+  /// is narrower than the paper — full-width images look the same at every
+  /// setting. It is applied through the generator's style cache rather than as
+  /// raw bytes; writing `ESC a` directly would leave that cache believing the
+  /// alignment never changed, and the next [text] call would then skip emitting
+  /// its own and print misaligned.
+  ///
+  /// An empty bitmap emits nothing.
+  PrintJob bitmap(
+    PrintlyBitmap bitmap, {
+    PrintlyTextAlign align = PrintlyTextAlign.center,
+  }) {
+    if (bitmap.isEmpty) return this;
+    _bytes
+      ..addAll(
+        _generator.setStyles(
+          const PosStyles().copyWith(align: _toPosAlign(align)),
+        ),
+      )
+      ..addAll(
+        RasterEncoder.emit(bitmap, bandHeight: _config.rasterBandHeight),
+      );
+    return this;
+  }
+
+  /// Renders [content] to dots and appends it — Turkish text that does not
+  /// depend on the printer's code page.
+  ///
+  /// The reason to prefer this over [text] is narrow but decisive: printers in
+  /// the PTP-II class ignore `ESC t` entirely and stay on CP437 forever, so
+  /// `ğ`, `ş` and `İ` are unreachable through the character-set path. Drawing
+  /// the glyphs sidesteps the printer's font altogether. On printers that do
+  /// honour code pages, [text] remains the cheaper choice — far fewer bytes.
+  ///
+  /// [width] defaults to the full paper width, so [align] positions the text
+  /// within the line rather than moving a block around.
+  ///
+  /// **Must be awaited.** The return type makes `job..textRaster(a)
+  /// ..textRaster(b)` a compile error rather than a source of scrambled
+  /// receipts; for a long job, prefer rendering up front and chaining
+  /// [bitmap] calls.
+  Future<PrintJob> textRaster(
+    String content, {
+    int? width,
+    double fontSize = PrintlyRaster.defaultFontSize,
+    PrintlyTextAlign align = PrintlyTextAlign.left,
+    bool bold = false,
+    String? fontFamily,
+    PrintlyDithering dithering = PrintlyDithering.threshold,
+    int threshold = PrintlyRaster.defaultTextThreshold,
+  }) async {
+    final PrintlyBitmap rendered = await PrintlyRaster.text(
+      content,
+      width: width ?? _config.paperWidth.dots,
+      fontSize: fontSize,
+      align: align,
+      bold: bold,
+      fontFamily: fontFamily,
+      dithering: dithering,
+      threshold: threshold,
+    );
+    // The bitmap already spans the requested width and carries the alignment
+    // inside it, so the block itself sits flush left.
+    return bitmap(rendered, align: PrintlyTextAlign.left);
+  }
+
+  /// Decodes [encoded] (PNG, JPEG, WebP, …) and appends it as dots.
+  ///
+  /// [width] is a ceiling that defaults to the paper width: wider images are
+  /// scaled down, narrower ones keep their size and are positioned by [align].
+  ///
+  /// Watch the ink coverage, not just the size. A large area of solid black
+  /// draws more current than a cheap 5 V printer can sustain, and it can shut
+  /// down mid-receipt without reporting anything the app could catch. Line art
+  /// prints far more reliably than photographs.
+  ///
+  /// **Must be awaited** — see [textRaster].
+  Future<PrintJob> image(
+    Uint8List encoded, {
+    int? width,
+    PrintlyTextAlign align = PrintlyTextAlign.center,
+    PrintlyDithering dithering = PrintlyDithering.floydSteinberg,
+    int threshold = PrintlyBitmap.defaultThreshold,
+  }) async {
+    final PrintlyBitmap rendered = await PrintlyRaster.image(
+      encoded,
+      width: width ?? _config.paperWidth.dots,
+      dithering: dithering,
+      threshold: threshold,
+    );
+    return bitmap(rendered, align: align);
+  }
+
+  /// Captures the `RepaintBoundary` carrying [boundaryKey] and appends it.
+  ///
+  /// The boundary must be mounted and painted — keep it on screen, which is no
+  /// hardship since a visible receipt preview is useful in its own right.
+  /// `Offstage` and `Opacity(0)` subtrees are never painted and are rejected.
+  ///
+  /// Takes a key rather than a widget because Flutter offers no supported way
+  /// to render a detached widget tree; an API that accepted a `Widget` would be
+  /// promising something it cannot do.
+  ///
+  /// **Must be awaited** — see [textRaster].
+  Future<PrintJob> widget(
+    GlobalKey boundaryKey, {
+    int? width,
+    PrintlyTextAlign align = PrintlyTextAlign.center,
+    PrintlyDithering dithering = PrintlyDithering.threshold,
+    int threshold = PrintlyRaster.defaultTextThreshold,
+  }) async {
+    final PrintlyBitmap rendered = await PrintlyRaster.widgetKey(
+      boundaryKey,
+      width: width ?? _config.paperWidth.dots,
+      dithering: dithering,
+      threshold: threshold,
+    );
+    return bitmap(rendered, align: align);
   }
 
   /// Serialises the job to printer-ready bytes.
