@@ -1,4 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Only for the "print an image from a URL" demo. Declared here in the
+         example, deliberately NOT in the plugin: a permission in the plugin
+         manifest is merged into every app that depends on printly, and an
+         offline point-of-sale app should not appear to request internet
+         access just because it prints receipts. Fetching bytes is the
+         consumer's job; printly takes a Uint8List. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="printly_example"
         android:name="${applicationName}"
