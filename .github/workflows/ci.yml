@@ -1,10 +1,14 @@
 name: CI
 
 on:
+  # `test` is the integration branch: features branch off it, merge back into
+  # it, and only reach `main` when a version ships. Running here too means a
+  # break shows up at the merge that caused it, rather than on release day
+  # when several features have already been stacked on top of it.
   push:
-    branches: [main]
+    branches: [main, test]
   pull_request:
-    branches: [main]
+    branches: [main, test]
 
 jobs:
   analyze-and-test:
