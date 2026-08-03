@@ -8,8 +8,24 @@ on:
 
 jobs:
   analyze-and-test:
-    name: Analyze & Test
+    name: Analyze & Test (${{ matrix.label }})
     runs-on: ubuntu-latest
+    strategy:
+      # Both ends are worth seeing; a failure at one should not hide the other.
+      fail-fast: false
+      matrix:
+        include:
+          # The floor declared in pubspec.yaml. Without this, reaching for an
+          # API or syntax that only exists in a newer SDK silently breaks the
+          # minimum the package promises — and nothing here would notice.
+          - label: floor 3.35.3
+            flutter-version: "3.35.3"
+          # Whatever stable is today. This is the end that caught
+          # `use_null_aware_elements`: a new analyzer lint on code that had
+          # been fine for months. Dependencies also resolve fresh here, since
+          # a library does not commit its lockfile.
+          - label: stable
+            flutter-version: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,6 +33,8 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          # Empty means "latest on the channel".
+          flutter-version: ${{ matrix.flutter-version }}
           channel: stable
           cache: true
 
@@ -26,7 +44,11 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # Style, not compatibility — and `dart format` output moves between Dart
+      # releases, so two SDKs could disagree with no correct way to satisfy
+      # both. Checked once, against the version the repo is formatted with.
       - name: Verify formatting
+        if: matrix.label == 'stable'
         run: dart format --set-exit-if-changed .
 
       - name: Static analysis

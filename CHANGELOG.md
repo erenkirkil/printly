@@ -50,6 +50,11 @@ cannot be told about code pages.
 
 - Android: minSdk 24, 16 KB page-size compatible (pure Kotlin, no `.so`).
 - iOS: 13.0+, shipped for both CocoaPods and Swift Package Manager.
+- Flutter `>=3.35.3` — the first release bundling the Dart 3.9.2 this package
+  requires. 3.35.0 through 3.35.2 ship Dart 3.9.0 and were previously claimed
+  in error, which would have met anyone on them with a resolution failure
+  rather than a clear "unsupported". CI now builds against both this floor and
+  current stable, which is how the mismatch surfaced.
 
 ### Known limits
 

@@ -13,9 +13,10 @@ topics:
 
 environment:
   sdk: ^3.9.2
-  # Flutter 3.35 is the first release that bundles Dart 3.9; a lower bound
-  # here would advertise SDKs the Dart constraint above cannot resolve on.
-  flutter: ">=3.35.0"
+  # 3.35.3 is the first Flutter that bundles Dart 3.9.2. 3.35.0 through
+  # 3.35.2 ship Dart 3.9.0, so claiming them would send anyone on those
+  # releases into a resolution error rather than an honest "unsupported".
+  flutter: ">=3.35.3"
 
 dependencies:
   flutter:
