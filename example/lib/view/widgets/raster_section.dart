@@ -22,9 +22,7 @@ class _RasterSectionState extends State<RasterSection> {
     text: widget.vm.text,
   );
   final TextEditingController _urlController = TextEditingController(
-    //text: 'https://dart.dev/assets/img/logo/dart-64.png',
-    text:
-        'https://instagram.fist1-2.fna.fbcdn.net/v/t51.2885-19/352935843_776776870579835_6064485847843258392_n.jpg?efg=eyJ2ZW5jb2RlX3RhZyI6InByb2ZpbGVfcGljLmRqYW5nby42ODkuYzIifQ&_nc_ht=instagram.fist1-2.fna.fbcdn.net&_nc_cat=111&_nc_oc=Q6cZ2gHTL7hJDQWZFLny-5eNipYuYlBgrEJ54JVf9qv5EHMNowZ9xa34Mcc0sq55tcJ5OLQ&_nc_ohc=g7Hk6PS9BPAQ7kNvwF_9yph&_nc_gid=nz3PY9kj-apB8lx2lqI3Ug&edm=APs17CUBAAAA&ccb=7-5&oh=00_AQGx0LatbpAheqPmgYaqkOJTo8LUsYpYKd6hPaCC08Qs_Q&oe=6A72843C&_nc_sid=10d13b',
+    text: 'https://dart.dev/assets/img/logo/dart-64.png',
   );
   final GlobalKey _boundaryKey = GlobalKey();
 
