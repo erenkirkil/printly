@@ -1,3 +1,14 @@
+## 0.2.0
+
+### Fixed
+
+- **Android BLE:** `requestMtu()` and `discoverServices()` were issued
+  back-to-back, racing on the single-operation GATT queue; on some stacks
+  (observed on Android 11) discovery was silently dropped and every BLE
+  connect died on the 10 s timeout. Discovery is now chained after the MTU
+  exchange settles, with a 1.5 s fallback so a missing `onMtuChanged` can
+  never wedge the connect.
+
 ## 0.1.0 — 2026-07-31
 
 First release. Bluetooth thermal printing for Flutter, written from scratch in
