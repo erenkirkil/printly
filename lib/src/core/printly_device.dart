@@ -52,6 +52,12 @@ class PrintlyDevice {
   /// Every transport this physical radio has been observed to support.
   /// A dual-mode printer (Classic + BLE) has two elements here; the choice
   /// of which one to actually open a link over belongs to `connect()`.
+  ///
+  /// Not defensively copied — wrapping it in `Set.unmodifiable` in the
+  /// constructor would prevent this class staying `const`. Treat it as
+  /// immutable regardless: [copyWith] and [mergeWith] both always allocate a
+  /// fresh set rather than mutating this one, so a caller that never mutates
+  /// the set it was handed is safe either way.
   final Set<ConnectionType> availableTransports;
 
   /// Advertised friendly name, when provided by the transport. May be `null`

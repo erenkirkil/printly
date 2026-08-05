@@ -397,7 +397,7 @@ class Printly {
 
   /// The [ConnectionType] [connect] chose (or was told to use) for [device]:
   /// the active link's transport, or the last one used if [device] is
-  /// currently disconnected. `null` if [device] has never been connected
+  /// currently disconnected. `null` if [device] has never been attempted
   /// this session.
   ConnectionType? transportOf(PrintlyDevice device) =>
       _connection.transportOf(device);

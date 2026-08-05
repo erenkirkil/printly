@@ -42,7 +42,7 @@ class DeviceTile extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       Text(
-                        device.name ?? '(unnamed)',
+                        device.hasName ? device.name! : '(unnamed)',
                         style: theme.textTheme.titleSmall,
                       ),
                       const SizedBox(height: 2),
