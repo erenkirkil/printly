@@ -201,13 +201,18 @@ public class PrintlyPlugin: NSObject, FlutterPlugin {
             result(false)
             return
         }
-        powerAlertManager = CBCentralManager(
+        let manager = CBCentralManager(
             delegate: nil,
             queue: nil,
             options: [CBCentralManagerOptionShowPowerAlertKey: true]
         )
+        powerAlertManager = manager
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            self?.powerAlertManager = nil
+            // Only clear our own instance — a second overlapping request may
+            // have replaced it, and its alert must outlive OUR timer.
+            if self?.powerAlertManager === manager {
+                self?.powerAlertManager = nil
+            }
         }
         result(true)
     }
