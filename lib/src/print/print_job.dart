@@ -538,10 +538,19 @@ class PrintJob {
       _ => null,
     };
 
-    // For throwError policy, validate that all characters are valid.
     if (unmappable == PrintlyUnmappable.throwError) {
-      if (allowed != null) {
-        _validateBarcodeData(data, type, allowed);
+      // The wrapped library validates CODE39 and the numeric symbologies
+      // itself, but Barcode.code128 only checks length — a non-encodable
+      // rune would silently print a corrupt symbol. Enforce the documented
+      // ArgumentError contract here, against the same charset the
+      // sanitizer targets.
+      if (type == PrintlyBarcodeType.code128 &&
+          data.runes.any((int rune) => !_code128Charset.contains(rune))) {
+        throw ArgumentError(
+          'Invalid code128 barcode payload: contains characters outside '
+          'printable ASCII. Pass unmappable: PrintlyUnmappable.transliterate '
+          'to sanitize instead. Got: "$data"',
+        );
       }
       return data;
     }
@@ -570,44 +579,6 @@ class PrintJob {
       out.writeCharCode(allowed.contains(rune) ? rune : fallback);
     }
     return out.toString();
-  }
-
-  /// Validates that [data] contains only characters valid for [type].
-  static void _validateBarcodeData(
-    String data,
-    PrintlyBarcodeType type,
-    Set<int> allowed,
-  ) {
-    // For CODE128, skip validation of code set selector prefix.
-    int startIdx = 0;
-    if (type == PrintlyBarcodeType.code128 &&
-        data.length >= 2 &&
-        data[0] == '{' &&
-        (data[1] == 'A' || data[1] == 'B' || data[1] == 'C')) {
-      startIdx = 2;
-    }
-
-    // Check each character (braces are allowed in CODE128, will be escaped later).
-    for (int i = startIdx; i < data.length; i++) {
-      final int rune = data.codeUnitAt(i);
-      if (type == PrintlyBarcodeType.code128) {
-        if (!allowed.contains(rune) && rune != 0x7B) {
-          // 0x7B is '{', allowed in CODE128 (will be escaped).
-          throw ArgumentError(
-            'Invalid ${type.name} barcode payload: contains character '
-            '"${String.fromCharCode(rune)}" (U+${rune.toRadixString(16).padLeft(4, '0')}) '
-            'which is outside printable ASCII. Got: "$data"',
-          );
-        }
-      } else {
-        if (!allowed.contains(rune)) {
-          throw ArgumentError(
-            'Invalid ${type.name} barcode payload: contains character '
-            '"${String.fromCharCode(rune)}" which is not in the valid charset. Got: "$data"',
-          );
-        }
-      }
-    }
   }
 
   /// Builds the CODE128 wire payload: in code set B a literal `{` must be
