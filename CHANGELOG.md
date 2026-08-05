@@ -108,8 +108,15 @@ state from permission state, and fixes an Android BLE GATT discovery race.
   `openBluetoothSettings()` cannot do). Returns whether the request was
   **shown**, not whether the radio ended up on — watch `adapterState` for
   the actual outcome.
+- `PrintlyDevice.mergeWith` and `PrintlyDevice.fromWireMap` — public merge/decode
+  helpers backing the unified device model.
 
 ### Fixed
+
+- **Blank advertised names no longer clobber a known name during merge** — a
+  whitespace-only BLE advertisement (real hardware behavior) must not flip
+  `hasName` to `false` and trigger UI fallback to "(unnamed)" or a spurious
+  classicFirst BLE fallback round.
 
 - **Android BLE:** `requestMtu()` and `discoverServices()` were issued
   back-to-back, racing on the single-operation GATT queue; on some stacks
