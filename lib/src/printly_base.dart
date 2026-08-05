@@ -46,6 +46,11 @@ class Printly {
   final ScanController _scan = ScanController();
   final ConnectionController _connection = ConnectionController();
 
+  /// Ref-count registry for every [PrintlyScanSession] created through
+  /// [newScanSession], scoped to this facade instance (and therefore to
+  /// [_scan]) instead of being process-wide — see [ScanSessionRegistry].
+  final ScanSessionRegistry _scanSessionRegistry = ScanSessionRegistry();
+
   /// Timeout applied to [startScan] calls that do not pass their own
   /// [Duration]. Starts at [kDefaultScanTimeout]; set it once per app
   /// (e.g. at startup) instead of repeating a custom timeout at every
@@ -237,6 +242,11 @@ class Printly {
   );
 
   /// Stops any in-progress scan. A no-op when no scan is running.
+  ///
+  /// Shares the same native scan as every [PrintlyScanSession] created via
+  /// [newScanSession]: this also ends the scan for any active sessions
+  /// (their `isScanning` observes `false`), regardless of whether the scan
+  /// was originally started here or through a session.
   Future<void> stopScan() => _scan.stopScan();
 
   /// Broadcast stream of discovered devices, deduplicated by transport +
@@ -272,8 +282,18 @@ class Printly {
   /// `dispose`); an in-flight session's `start()` without an explicit
   /// `timeout` uses [defaultScanTimeout] at the time `start()` runs, not at
   /// the time this method was called.
+  ///
+  /// Sessions and this facade's own [startScan]/[stopScan] share one native
+  /// scan — there is no per-session native scan. That has two consequences
+  /// worth knowing: [stopScan] ends every active session's scan too, and an
+  /// undisposed active session keeps this facade's session registry
+  /// non-empty, which blocks the last-session auto-stop that would
+  /// otherwise fire when every session using it has stopped — always
+  /// `dispose()` a session (e.g. in your widget's `dispose()`), not just
+  /// `stop()` it, once you are done with it.
   PrintlyScanSession newScanSession() => createScanSession(
     controller: _scan,
+    registry: _scanSessionRegistry,
     resolveDefaultTimeout: () => defaultScanTimeout,
   );
 
