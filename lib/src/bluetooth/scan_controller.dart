@@ -154,6 +154,12 @@ class ScanController {
   /// - A Classic bonded-cache seed ([PrintlyDevice.seenInScan] `false`) can
   ///   be out of range or long powered off — its presence here only means it
   ///   is paired at the OS level, not that it is reachable right now.
+  ///
+  /// Screen-scoped consumers (a subscription that starts and ends with one
+  /// screen) should prefer `Printly.instance.newScanSession()` instead —
+  /// this stream's replay-to-every-subscriber behaviour is right for the
+  /// process-wide singleton but leaks a previous screen's stale state into
+  /// a fresh one.
   Stream<List<PrintlyDevice>> get devicesStream => _devicesSubject.stream;
 
   /// Broadcast stream signalling whether a native scan is in progress.

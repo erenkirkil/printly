@@ -47,6 +47,16 @@
   device: the active link's transport, or the last one used once
   disconnected, or `null` if the device has never been connected this
   session.
+- `Printly.newScanSession()` / `PrintlyScanSession` — a screen-scoped scan
+  handle whose `devices`/`isScanning` streams are seeded empty/`false` and
+  never replay a previous screen's state, unlike the process-lifetime
+  `devicesStream`/`isScanningStream`. Encodes three field bugs traced to
+  that replay landing in a fresh screen: a stale `isScanning: false`
+  clobbering optimistic "scanning…" UI, a replay misread as "scan finished,
+  nothing found" triggering a phantom BLE fallback, and a two-minute-old
+  42-device list rendering before the new scan started (a tap on it ended in
+  a connect timeout). `stop()` is ref-counted across concurrently active
+  sessions — the native scan only stops once the last one lets go.
 - `ScanStrategy` / `Printly.startScan()`'s new `strategy` parameter (default
   `ScanStrategy.parallel`, current behaviour unchanged) — pass
   `ScanStrategy.classicFirst` to scan Bluetooth Classic first on Android and

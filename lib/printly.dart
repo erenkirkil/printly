@@ -11,6 +11,7 @@ export 'src/bluetooth/bluetooth_adapter_state.dart';
 export 'src/bluetooth/connection_controller.dart' show kDefaultConnectTimeout;
 export 'src/bluetooth/scan_controller.dart'
     show kDefaultScanTimeout, kDefaultScanTypes, ScanStrategy;
+export 'src/bluetooth/scan_session.dart' show PrintlyScanSession;
 export 'src/core/connection_event.dart';
 export 'src/core/connection_state.dart';
 export 'src/core/connection_type.dart';
