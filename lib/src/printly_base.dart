@@ -131,6 +131,57 @@ class Printly {
   /// first event arrives.
   bool get isBluetoothAvailable => _bluetooth.isBluetoothAvailable;
 
+  /// The permission set printly evaluates on the given platform/API level.
+  ///
+  /// Extracted so [checkPermissions] and [requestPermissions] can never
+  /// drift apart — consumers previously had to duplicate this mapping (and
+  /// silently break when it changed here). Visible for tests only; the
+  /// `permission_handler` type stays out of the public API.
+  @visibleForTesting
+  static List<ph.Permission> requiredPermissionSet({
+    required bool isAndroid,
+    required int sdkInt,
+  }) {
+    if (isAndroid) {
+      return sdkInt >= 31
+          ? <ph.Permission>[
+              ph.Permission.bluetoothScan,
+              ph.Permission.bluetoothConnect,
+            ]
+          : <ph.Permission>[
+              ph.Permission.bluetooth,
+              ph.Permission.locationWhenInUse,
+            ];
+    }
+    return <ph.Permission>[ph.Permission.bluetooth];
+  }
+
+  Future<List<ph.Permission>> _requiredPermissions() async {
+    if (!Platform.isAndroid) {
+      return requiredPermissionSet(isAndroid: false, sdkInt: 0);
+    }
+    final int sdkInt = await PrintlyPlatform.instance.getAndroidSdkInt();
+    return requiredPermissionSet(isAndroid: true, sdkInt: sdkInt);
+  }
+
+  /// Returns the current permission status **without prompting the user**.
+  ///
+  /// Evaluates exactly the same permission set as [requestPermissions]
+  /// (chosen by platform and Android API level) and aggregates to the worst
+  /// status. Use it to gate UI before deciding whether to show a rationale
+  /// or call [requestPermissions] — calling this can never pop a system
+  /// dialog. On iOS the status is read from
+  /// `CBCentralManager.authorization` (a class property), so no central
+  /// manager is created and the system Bluetooth prompt is not triggered.
+  Future<PrintlyPermissionStatus> checkPermissions() async {
+    final List<ph.Permission> required = await _requiredPermissions();
+    final List<PrintlyPermissionStatus> statuses = <PrintlyPermissionStatus>[];
+    for (final ph.Permission permission in required) {
+      statuses.add(_toPrintlyStatus(await permission.status));
+    }
+    return _aggregateStatus(statuses);
+  }
+
   /// Requests the runtime permissions required to use Bluetooth on the
   /// current platform.
   ///
@@ -147,22 +198,7 @@ class Printly {
   /// (e.g. if one is `permanentlyDenied` the overall result is
   /// `permanentlyDenied`).
   Future<PrintlyPermissionStatus> requestPermissions() async {
-    final List<ph.Permission> required;
-    if (Platform.isAndroid) {
-      final int sdkInt = await PrintlyPlatform.instance.getAndroidSdkInt();
-      required = sdkInt >= 31
-          ? <ph.Permission>[
-              ph.Permission.bluetoothScan,
-              ph.Permission.bluetoothConnect,
-            ]
-          : <ph.Permission>[
-              ph.Permission.bluetooth,
-              ph.Permission.locationWhenInUse,
-            ];
-    } else {
-      required = <ph.Permission>[ph.Permission.bluetooth];
-    }
-
+    final List<ph.Permission> required = await _requiredPermissions();
     final Map<ph.Permission, ph.PermissionStatus> results = await required
         .request();
     return _aggregateStatus(results.values.map(_toPrintlyStatus));
