@@ -62,6 +62,7 @@ PrintlyDevice _device(String address) => PrintlyDevice(
 void main() {
   late _FakePlatform platform;
   late ScanController controller;
+  late ScanSessionRegistry registry;
 
   setUp(() {
     platform = _FakePlatform();
@@ -69,6 +70,11 @@ void main() {
       platform: platform,
       emitInterval: Duration.zero,
     );
+    // A fresh registry per test — this is exactly what fixes the old
+    // static-Set test isolation problem: each test's sessions ref-count
+    // against their own registry, never a process-wide one shared (and
+    // polluted) across every other test in the suite.
+    registry = ScanSessionRegistry();
   });
 
   tearDown(() async {
@@ -78,6 +84,7 @@ void main() {
 
   PrintlyScanSession newSession() => createScanSession(
     controller: controller,
+    registry: registry,
     resolveDefaultTimeout: () => const Duration(days: 1),
   );
 
@@ -111,21 +118,88 @@ void main() {
       await session.dispose();
     });
 
-    test('(b) controller mid-scan with isScanning true: a fresh, un-started '
-        "session's isScanning stays false until its own start()", () async {
+    test('(b) controller mid-scan with 3 devices already found: a fresh, '
+        "un-started session sees nothing, then joining via start() "
+        'delivers the 3 live devices and isScanning true as its first '
+        'emissions', () async {
       unawaited(controller.startScan(timeout: const Duration(days: 1)));
       await pumpEventQueue();
+      platform.emit(_device('J0'));
+      platform.emit(_device('J1'));
+      platform.emit(_device('J2'));
+      await pumpEventQueue();
       expect(controller.isScanning, isTrue);
+      expect(controller.currentDevices, hasLength(3));
 
       final PrintlyScanSession session = newSession();
-      // No start() yet — must not reflect the controller's live true.
+      final List<List<PrintlyDevice>> deviceEmissions = <List<PrintlyDevice>>[];
+      final List<bool> scanningEmissions = <bool>[];
+      final StreamSubscription<List<PrintlyDevice>> devicesSub = session.devices
+          .listen(deviceEmissions.add);
+      final StreamSubscription<bool> scanningSub = session.isScanning.listen(
+        scanningEmissions.add,
+      );
+      addTearDown(devicesSub.cancel);
+      addTearDown(scanningSub.cancel);
+      await pumpEventQueue();
+
+      // No start() yet — must not reflect the controller's live state: only
+      // the session's own seeded empty/false.
       expect(session.currentDevices, isEmpty);
-      final bool firstIsScanning = await session.isScanning.first;
-      expect(firstIsScanning, isFalse);
+      expect(deviceEmissions, <List<PrintlyDevice>>[const <PrintlyDevice>[]]);
+      expect(scanningEmissions, <bool>[false]);
 
       await session.start();
       await pumpEventQueue();
+
+      // Joining a live scan delivers its genuinely-current finds (not a
+      // stale replay — the scan is still running) as this session's first
+      // real emission, plus isScanning flipping true.
+      expect(session.currentDevices, hasLength(3));
+      expect(
+        deviceEmissions.last.map((PrintlyDevice d) => d.address).toSet(),
+        <String>{'J0', 'J1', 'J2'},
+      );
+      expect(scanningEmissions, <bool>[false, true]);
+
+      await session.dispose();
+    });
+
+    test('(pending-stop window) a stop in flight when start() is called: '
+        'the stale pre-stop list never reaches the session, only what is '
+        'discovered after the reset that follows', () async {
+      await controller.startScan(timeout: const Duration(days: 1));
+      for (int i = 0; i < 42; i++) {
+        platform.emit(_device('S$i'));
+      }
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(42));
+
+      // Fire-and-forget stop, then immediately create+start a session so its
+      // startScan() chains behind the still-in-flight stop.
+      unawaited(controller.stopScan());
+      final PrintlyScanSession session = newSession();
+      final List<List<PrintlyDevice>> emissions = <List<PrintlyDevice>>[];
+      final StreamSubscription<List<PrintlyDevice>> sub = session.devices
+          .listen(emissions.add);
+      addTearDown(sub.cancel);
+
+      final Future<void> startFuture = session.start();
+      await pumpEventQueue();
+      await startFuture;
+      await pumpEventQueue();
+
+      // Never observed the 42 stale devices at any point.
+      for (final List<PrintlyDevice> emission in emissions) {
+        expect(emission, hasLength(lessThan(42)));
+      }
       expect(session.currentDevices, isEmpty);
+
+      // Post-reset discoveries flow normally once armed.
+      platform.emit(_device('FRESH'));
+      await pumpEventQueue();
+      expect(session.currentDevices, hasLength(1));
+      expect(session.currentDevices.single.address, 'FRESH');
 
       await session.dispose();
     });
@@ -222,6 +296,7 @@ void main() {
         'kDefaultScanTimeout', () async {
       final PrintlyScanSession session = createScanSession(
         controller: controller,
+        registry: registry,
         resolveDefaultTimeout: () => const Duration(milliseconds: 30),
       );
       await session.start();
