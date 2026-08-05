@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:rxdart/rxdart.dart';
@@ -9,9 +10,11 @@ import '../core/printly_exception.dart';
 import '../platform/printly_platform_interface.dart';
 
 /// Default timeout for [ScanController.startScan] when the caller does not
-/// provide one. Chosen to align with Android 8+ BLE scan windowing, which
-/// throttles opportunistic scans after ~30 seconds.
-const Duration kDefaultScanTimeout = Duration(seconds: 30);
+/// provide one. A powered, in-range thermal printer answers within the
+/// first few seconds; the remaining window only harvests anonymous ambient
+/// BLE advertisers and keeps the radio busy — measured in the field at
+/// ~100 devices in 30 s.
+const Duration kDefaultScanTimeout = Duration(seconds: 10);
 
 /// Default set of transports to scan when the caller passes no explicit
 /// preference. Network scanning is intentionally excluded — network printers
@@ -72,9 +75,22 @@ class ScanController {
   Future<void>? _pendingStart;
   Future<void>? _pendingStop;
   bool _disposed = false;
+  bool _includeBonded = true;
 
   /// Broadcast stream of the currently known devices, deduplicated and
   /// emitted as an immutable list on each change.
+  ///
+  /// Three things to know before wiring this into UI:
+  /// - The list replays for the lifetime of the controller — it never
+  ///   forgets a device on its own between scans. Call [clearDevices] before
+  ///   a fresh scan if stale entries from a previous session/location would
+  ///   be misleading.
+  /// - Treat [isScanningStream] as the transition signal, not this stream: a
+  ///   device can still be added or updated for a moment after scanning
+  ///   stops (the final coalesced flush in [stopScan]).
+  /// - A Classic bonded-cache seed ([PrintlyDevice.seenInScan] `false`) can
+  ///   be out of range or long powered off — its presence here only means it
+  ///   is paired at the OS level, not that it is reachable right now.
   Stream<List<PrintlyDevice>> get devicesStream => _devicesSubject.stream;
 
   /// Broadcast stream signalling whether a native scan is in progress.
@@ -105,11 +121,24 @@ class ScanController {
   /// parallel native scans or leak timers. Calling it while a [stopScan] is
   /// still in flight queues the start behind the pending stop (the natural
   /// "rescan" gesture), instead of silently dropping it.
+  ///
+  /// [timeout] defaults to [kDefaultScanTimeout] when omitted. [types]
+  /// defaults to [defaultScanTypesForPlatform] for the running platform
+  /// (iOS never requests Classic — it has no public Classic API). When
+  /// [includeBonded] is `false`, Classic bonded-cache seeds
+  /// ([PrintlyDevice.seenInScan] `false`) are dropped instead of being
+  /// added to [devicesStream]; a seed later confirmed by an actual inquiry
+  /// result still appears once [PrintlyDevice.mergeWith] flips
+  /// [PrintlyDevice.seenInScan] to `true`.
   Future<void> startScan({
-    Duration timeout = kDefaultScanTimeout,
-    Set<ConnectionType> types = kDefaultScanTypes,
+    Duration? timeout,
+    Set<ConnectionType>? types,
+    bool includeBonded = true,
   }) {
     _assertNotDisposed();
+    final Duration effectiveTimeout = timeout ?? kDefaultScanTimeout;
+    final Set<ConnectionType> effectiveTypes =
+        types ?? defaultScanTypesForPlatform(isIOS: Platform.isIOS);
     if (_pendingStart != null) return _pendingStart!;
 
     final Future<void>? stopping = _pendingStop;
@@ -120,23 +149,48 @@ class ScanController {
       // stop still lets the start proceed.
       _pendingStart = stopping
           .then<void>((_) {}, onError: (_) {})
-          .then((_) => _runStart(timeout: timeout, types: types));
+          .then(
+            (_) => _runStart(
+              timeout: effectiveTimeout,
+              types: effectiveTypes,
+              includeBonded: includeBonded,
+            ),
+          );
       return _pendingStart!;
     }
     if (isScanning) return Future<void>.value();
 
-    _pendingStart = _runStart(timeout: timeout, types: types);
+    _pendingStart = _runStart(
+      timeout: effectiveTimeout,
+      types: effectiveTypes,
+      includeBonded: includeBonded,
+    );
     return _pendingStart!;
   }
+
+  /// Platform-aware default transport set for [startScan] when the caller
+  /// passes no explicit [startScan.types]. Separated as a pure, static
+  /// function (rather than reading `Platform.isIOS` inline) so it is
+  /// testable without a platform channel or device.
+  ///
+  /// iOS is BLE-only here because it has no public Bluetooth Classic API —
+  /// requesting Classic there would either be ignored or fail outright, so
+  /// asking for it by default is never useful. Android gets both: Classic
+  /// SPP/RFCOMM printers remain common in the field alongside BLE ones.
+  static Set<ConnectionType> defaultScanTypesForPlatform({
+    required bool isIOS,
+  }) => isIOS ? const <ConnectionType>{ConnectionType.ble} : kDefaultScanTypes;
 
   Future<void> _runStart({
     required Duration timeout,
     required Set<ConnectionType> types,
+    required bool includeBonded,
   }) async {
     try {
       _emitTimer?.cancel();
       _emitTimer = null;
       _dedup.clear();
+      _includeBonded = includeBonded;
       _devicesSubject.add(const <PrintlyDevice>[]);
       _isScanningSubject.add(true);
       await _platform.startScan(types: types);
@@ -196,6 +250,7 @@ class ScanController {
 
   void _onDeviceDiscovered(PrintlyDevice device) {
     if (_disposed) return;
+    if (!_includeBonded && !device.seenInScan) return;
     final PrintlyDevice? existing = _dedup[device.dedupKey];
     final PrintlyDevice merged = existing == null
         ? device

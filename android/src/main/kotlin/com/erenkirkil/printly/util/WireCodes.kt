@@ -62,6 +62,7 @@ internal object WireCodes {
         const val IS_BONDED = "isBonded"
         const val STATE = "state"
         const val FAILURE_REASON = "failureReason"
+        const val SEEN_IN_SCAN = "seenInScan"
     }
 
     /**

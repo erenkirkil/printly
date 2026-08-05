@@ -22,7 +22,11 @@ void main() {
 
     await store.writeDevice(sampleDevice);
     final LastDeviceStore reopened = await LastDeviceStore.open();
-    expect(reopened.readDevice(), sampleDevice);
+    final PrintlyDevice? roundTripped = reopened.readDevice();
+    expect(roundTripped, sampleDevice);
+    // Equality is address-only (C1) — assert the field round-trips too, or
+    // a silently-dropped `availableTransports` would pass this test.
+    expect(roundTripped!.availableTransports, sampleDevice.availableTransports);
   });
 
   test('writeDevice(null) clears the persisted value', () async {

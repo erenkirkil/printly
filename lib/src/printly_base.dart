@@ -45,6 +45,12 @@ class Printly {
   final ScanController _scan = ScanController();
   final ConnectionController _connection = ConnectionController();
 
+  /// Timeout applied to [startScan] calls that do not pass their own
+  /// [Duration]. Starts at [kDefaultScanTimeout]; set it once per app
+  /// (e.g. at startup) instead of repeating a custom timeout at every
+  /// [startScan] call site.
+  Duration defaultScanTimeout = kDefaultScanTimeout;
+
   Future<LastDeviceStore>? _storeFuture;
   LastDeviceStore? _cachedStore;
   PrintlyDevice? _cachedLastDevice;
@@ -198,17 +204,28 @@ class Printly {
   /// [ph.openAppSettings].
   Future<bool> openAppSettings() => ph.openAppSettings();
 
-  /// Starts a device scan across the requested transport [types]. Defaults to
-  /// scanning both Bluetooth Classic and BLE for [kDefaultScanTimeout]; the
-  /// scan auto-stops when the timeout elapses.
+  /// Starts a device scan across the requested transport [types]. [timeout]
+  /// defaults to [defaultScanTimeout] ([kDefaultScanTimeout] unless
+  /// overridden); the scan auto-stops when it elapses. [types] defaults to
+  /// the platform-appropriate set (`{classic, ble}` on Android, `{ble}` on
+  /// iOS — see `ScanController.defaultScanTypesForPlatform`).
+  ///
+  /// When [includeBonded] is `false`, Classic bonded-cache seeds are
+  /// excluded from [devicesStream] until they are actually seen by an
+  /// inquiry — see [ScanController.startScan] for the full semantics.
   ///
   /// Safe to call repeatedly — concurrent calls share a single native scan
   /// and the same in-flight future, so duplicate button taps cannot start
   /// parallel scans.
   Future<void> startScan({
-    Duration timeout = kDefaultScanTimeout,
-    Set<ConnectionType> types = kDefaultScanTypes,
-  }) => _scan.startScan(timeout: timeout, types: types);
+    Duration? timeout,
+    Set<ConnectionType>? types,
+    bool includeBonded = true,
+  }) => _scan.startScan(
+    timeout: timeout ?? defaultScanTimeout,
+    types: types,
+    includeBonded: includeBonded,
+  );
 
   /// Stops any in-progress scan. A no-op when no scan is running.
   Future<void> stopScan() => _scan.stopScan();
