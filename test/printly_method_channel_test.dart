@@ -152,19 +152,23 @@ void main() {
 
     expect(received, hasLength(2));
     expect(received[0].address, 'AA:BB:CC:DD:EE:FF');
-    expect(received[0].type, ConnectionType.ble);
+    expect(received[0].availableTransports, <ConnectionType>{
+      ConnectionType.ble,
+    });
     expect(received[0].name, 'Printer');
     expect(received[0].rssi, -55);
     expect(received[0].isBonded, isTrue);
-    expect(received[1].type, ConnectionType.classic);
+    expect(received[1].availableTransports, <ConnectionType>{
+      ConnectionType.classic,
+    });
 
     await subscription.cancel();
   });
 
   test('connect forwards device payload and timeout', () async {
-    const PrintlyDevice device = PrintlyDevice(
+    final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
-      type: ConnectionType.ble,
+      availableTransports: <ConnectionType>{ConnectionType.ble},
       name: 'Printer',
     );
     await platform.connect(device: device, timeout: const Duration(seconds: 5));
@@ -176,9 +180,9 @@ void main() {
   });
 
   test('disconnect forwards device payload', () async {
-    const PrintlyDevice device = PrintlyDevice(
+    final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
-      type: ConnectionType.ble,
+      availableTransports: <ConnectionType>{ConnectionType.ble},
     );
     await platform.disconnect(device: device);
     expect(invokedMethod, 'disconnect');
@@ -188,9 +192,9 @@ void main() {
   });
 
   test('write forwards device payload and bytes', () async {
-    const PrintlyDevice device = PrintlyDevice(
+    final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
-      type: ConnectionType.classic,
+      availableTransports: <ConnectionType>{ConnectionType.classic},
     );
     final Uint8List bytes = Uint8List.fromList(<int>[0x1B, 0x40, 0x41]);
     await platform.write(device: device, bytes: bytes);
@@ -213,9 +217,9 @@ void main() {
           });
     }
 
-    const PrintlyDevice device = PrintlyDevice(
+    final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
-      type: ConnectionType.ble,
+      availableTransports: <ConnectionType>{ConnectionType.ble},
     );
 
     test('startScan maps the specific message over the generic code', () async {

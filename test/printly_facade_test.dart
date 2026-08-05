@@ -49,9 +49,9 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   }
 }
 
-const PrintlyDevice device = PrintlyDevice(
+final PrintlyDevice device = PrintlyDevice(
   address: 'AA:BB:CC:DD:EE:FF',
-  type: ConnectionType.classic,
+  availableTransports: <ConnectionType>{ConnectionType.classic},
   name: 'PTP-II',
 );
 
@@ -77,10 +77,7 @@ void main() {
     final Future<void> f = printly.connect(device);
     await Future<void>.delayed(Duration.zero);
     platform.events.add(
-      const PrintlyConnectionEvent(
-        device: device,
-        state: ConnectionState.connected,
-      ),
+      PrintlyConnectionEvent(device: device, state: ConnectionState.connected),
     );
     await f;
   }
@@ -116,7 +113,7 @@ void main() {
       final Future<bool> result = printly.reconnectLastDevice();
       await pumpEventQueue();
       platform.events.add(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: device,
           state: ConnectionState.connected,
         ),
@@ -129,9 +126,9 @@ void main() {
         'stale persisted one when the store opens later', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{
         _deviceKey: json.encode(
-          const PrintlyDevice(
+          PrintlyDevice(
             address: '11:22:33:44:55:66',
-            type: ConnectionType.ble,
+            availableTransports: <ConnectionType>{ConnectionType.ble},
             name: 'OLD',
           ).toJson(),
         ),
@@ -167,7 +164,7 @@ void main() {
 
       // Resolve the retry so no timer outlives the test.
       platform.events.add(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: device,
           state: ConnectionState.connected,
         ),

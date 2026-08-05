@@ -30,6 +30,9 @@
   without ever prompting, evaluating exactly the same permission set as
   `requestPermissions()` so consumers no longer duplicate the API-level
   mapping.
+- `PrintlyDevice.seenInScan` — distinguishes a bonded seed from an actual
+  scan sighting (`false` may not currently be in range).
+- `PrintlyDevice.hasName` — whether `name` is present and non-blank.
 
 ### Breaking
 
@@ -40,6 +43,13 @@
   on permission changes. Migration: gate UI on
   `Printly.instance.checkPermissions()` for permission state;
   `BluetoothAdapterState.unauthorized` still occurs on iOS.
+- `PrintlyDevice` now models one physical radio per record: the `type`
+  field is replaced by `availableTransports` (a dual-mode printer that
+  advertises both Classic and BLE appears **once**), `dedupKey` is the bare
+  address, and equality is address-only. Transport selection moved to
+  `connect()`. Persisted last-device entries from 0.1.x are migrated
+  automatically. Migration: replace `device.type` reads with
+  `device.availableTransports`.
 
 ## 0.1.0 — 2026-07-31
 

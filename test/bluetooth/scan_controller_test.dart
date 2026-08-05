@@ -169,16 +169,16 @@ void main() {
     test('merges repeat advertisements by transport+address', () async {
       await controller.startScan();
       platform.emit(
-        const PrintlyDevice(
+        PrintlyDevice(
           address: 'AA:BB',
-          type: ConnectionType.ble,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
           rssi: -60,
         ),
       );
       platform.emit(
-        const PrintlyDevice(
+        PrintlyDevice(
           address: 'AA:BB',
-          type: ConnectionType.ble,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
           name: 'Printer',
           rssi: -50,
         ),
@@ -190,33 +190,44 @@ void main() {
       expect(controller.currentDevices.first.rssi, -50);
     });
 
-    test('same address on different transports yields two entries', () async {
+    test('same address on different transports merges into one entry '
+        '(dual-mode radios no longer appear twice)', () async {
       await controller.startScan();
       platform.emit(
-        const PrintlyDevice(address: 'AA:BB', type: ConnectionType.classic),
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
       );
       platform.emit(
-        const PrintlyDevice(address: 'AA:BB', type: ConnectionType.ble),
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
       );
       await Future<void>.delayed(Duration.zero);
 
-      expect(controller.currentDevices, hasLength(2));
+      expect(controller.currentDevices, hasLength(1));
+      expect(
+        controller.currentDevices.single.availableTransports,
+        <ConnectionType>{ConnectionType.classic, ConnectionType.ble},
+      );
     });
 
     test('keeps existing name when a later advertisement omits it', () async {
       await controller.startScan();
       platform.emit(
-        const PrintlyDevice(
+        PrintlyDevice(
           address: 'AA:BB',
-          type: ConnectionType.ble,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
           name: 'Printer',
           rssi: -55,
         ),
       );
       platform.emit(
-        const PrintlyDevice(
+        PrintlyDevice(
           address: 'AA:BB',
-          type: ConnectionType.ble,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
           rssi: -40,
         ),
       );
@@ -230,7 +241,10 @@ void main() {
     test('startScan clears previous device list', () async {
       await controller.startScan();
       platform.emit(
-        const PrintlyDevice(address: 'AA:BB', type: ConnectionType.ble),
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
       );
       await Future<void>.delayed(Duration.zero);
       expect(controller.currentDevices, hasLength(1));
@@ -260,7 +274,10 @@ void main() {
       await controller.startScan();
       await controller.dispose();
       platform.emit(
-        const PrintlyDevice(address: 'AA:BB', type: ConnectionType.ble),
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
       );
       await Future<void>.delayed(Duration.zero);
       // Disposed — no throws, further public calls raise StateError.
@@ -288,7 +305,12 @@ void main() {
       await Future<void>.delayed(Duration.zero); // seeded empty emission
 
       for (int i = 0; i < 10; i++) {
-        platform.emit(PrintlyDevice(address: 'D$i', type: ConnectionType.ble));
+        platform.emit(
+          PrintlyDevice(
+            address: 'D$i',
+            availableTransports: <ConnectionType>{ConnectionType.ble},
+          ),
+        );
       }
       await Future<void>.delayed(const Duration(milliseconds: 90));
 

@@ -255,7 +255,7 @@ class Printly {
     PrintlyDevice device, {
     Duration timeout = kDefaultConnectTimeout,
   }) async {
-    if (device.type == ConnectionType.network) {
+    if (device.availableTransports.contains(ConnectionType.network)) {
       // Fail fast with a typed error instead of a native round-trip that
       // would reject with the same reason after a delay.
       throw const PrintlyUnsupportedException(

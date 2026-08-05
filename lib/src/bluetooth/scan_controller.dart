@@ -199,11 +199,7 @@ class ScanController {
     final PrintlyDevice? existing = _dedup[device.dedupKey];
     final PrintlyDevice merged = existing == null
         ? device
-        : existing.copyWith(
-            name: device.name ?? existing.name,
-            rssi: device.rssi ?? existing.rssi,
-            isBonded: device.isBonded || existing.isBonded,
-          );
+        : existing.mergeWith(device);
     _dedup[device.dedupKey] = merged;
     _scheduleEmit();
   }

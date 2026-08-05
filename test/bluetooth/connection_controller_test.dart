@@ -53,14 +53,14 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   }
 }
 
-const PrintlyDevice deviceA = PrintlyDevice(
+final PrintlyDevice deviceA = PrintlyDevice(
   address: 'AA:AA',
-  type: ConnectionType.ble,
+  availableTransports: <ConnectionType>{ConnectionType.ble},
   name: 'A',
 );
-const PrintlyDevice deviceB = PrintlyDevice(
+final PrintlyDevice deviceB = PrintlyDevice(
   address: 'BB:BB',
-  type: ConnectionType.ble,
+  availableTransports: <ConnectionType>{ConnectionType.ble},
   name: 'B',
 );
 
@@ -88,7 +88,7 @@ void main() {
       platform.connectCompleter!.complete();
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -101,7 +101,7 @@ void main() {
       final Future<void> f = controller.connect(deviceA);
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -117,7 +117,7 @@ void main() {
       final Future<void> fa = controller.connect(deviceA);
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -128,7 +128,7 @@ void main() {
       final Future<void> fb = controller.connect(deviceB);
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceB,
           state: ConnectionState.connected,
         ),
@@ -142,7 +142,7 @@ void main() {
       final Future<void> f = controller.connect(deviceA);
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -174,13 +174,13 @@ void main() {
         expect(received, <ConnectionState>[ConnectionState.disconnected]);
 
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.connecting,
           ),
         );
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.connected,
           ),
@@ -203,14 +203,14 @@ void main() {
         final subscription = controller.activeDeviceStream.listen(devices.add);
 
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.connected,
           ),
         );
         await Future<void>.delayed(Duration.zero);
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.disconnected,
           ),
@@ -226,7 +226,7 @@ void main() {
       'error event surfaces the failureReason via lastFailureReasonOf',
       () async {
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.error,
             failureReason: 'socket timeout',
@@ -263,7 +263,7 @@ void main() {
       expect(done, isFalse);
 
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -276,7 +276,7 @@ void main() {
       final Future<void> future = controller.connect(deviceA);
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.error,
           failureReason: 'refused',
@@ -321,7 +321,7 @@ void main() {
 
       // The OLD link's terminal event lands after the new attempt started…
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.disconnected,
         ),
@@ -331,7 +331,7 @@ void main() {
       expect(controller.stateOf(deviceA), ConnectionState.connecting);
 
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -349,14 +349,14 @@ void main() {
 
       // Old link's terminal event (swallowed)…
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.disconnected,
         ),
       );
       // …then the NEW attempt genuinely fails with a disconnect.
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.disconnected,
         ),
@@ -371,7 +371,7 @@ void main() {
         final Future<void> future = controller.connect(deviceA);
         await Future<void>.delayed(Duration.zero);
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.disconnected,
           ),
