@@ -7,7 +7,9 @@
   (observed on Android 11) discovery was silently dropped and every BLE
   connect died on the 10 s timeout. Discovery is now chained after the MTU
   exchange settles, with a 1.5 s fallback so a missing `onMtuChanged` can
-  never wedge the connect.
+  never wedge the connect. Callers passing very short custom connect
+  timeouts should note the MTU exchange may now occupy up to the first
+  1.5 s of the budget.
 - `PrintJob.barcode()` now throws `ArgumentError` for CODE128 payloads
   containing non-encodable characters, as its documentation always
   promised — previously such payloads silently printed a corrupt symbol.
