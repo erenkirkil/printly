@@ -9,6 +9,16 @@
   exchange settles, with a 1.5 s fallback so a missing `onMtuChanged` can
   never wedge the connect.
 
+### Added
+
+- `TurkishCodePage.toLatin1()` — public sanitization helper that makes any
+  string Latin-1 safe, transliterating Turkish letters and typographic
+  punctuation to readable ASCII.
+- `PrintJob.qr()` now accepts `unmappable: PrintlyUnmappable` (default
+  `throwError`, unchanged) and `replacement`, so field input containing
+  `₺`, smart quotes or em dashes can print a sanitized QR instead of
+  throwing.
+
 ## 0.1.0 — 2026-07-31
 
 First release. Bluetooth thermal printing for Flutter, written from scratch in
