@@ -83,7 +83,7 @@ class ConnectionController {
 
   /// The transport [connect] chose (or was told to use) for [device]: the
   /// active link's transport, or the last one used if [device] is currently
-  /// disconnected. `null` if [device] has never been connected through this
+  /// disconnected. `null` if [device] has never been attempted through this
   /// controller.
   ConnectionType? transportOf(PrintlyDevice device) =>
       _transports[device.dedupKey];
@@ -186,7 +186,10 @@ class ConnectionController {
 
     if (stateOf(device) == ConnectionState.connected) {
       final ConnectionType? active = _transports[key];
-      if (transport == null || active == transport) {
+      // Avoid switching if the remembered transport is missing (a disconnect
+      // with a freshly-resolved transport could miss the native session keyed
+      // by type:address).
+      if (active == null || transport == null || active == transport) {
         return Future<void>.value();
       }
       return _switchTransportThenConnect(device, transport, timeout);
@@ -228,7 +231,11 @@ class ConnectionController {
   /// Cross-transport switch: tears down the link currently open over the
   /// previously-chosen transport, then issues a fresh [connect] pinned to
   /// [transport]. Used only from [connect] when the caller explicitly asks
-  /// for a transport that differs from the active one.
+  /// for a transport that differs from the active one. The teardown failure
+  /// deliberately propagates (unlike [_safeDisconnect]'s best-effort swallow)
+  /// because opening GATT while a Classic link may still be up on the same
+  /// dual-mode radio is a known-flaky configuration; state remains recoverable
+  /// (next connect takes the teardownInFlight path).
   Future<void> _switchTransportThenConnect(
     PrintlyDevice device,
     ConnectionType transport,
@@ -305,15 +312,15 @@ class ConnectionController {
 
   Future<void> _runDisconnect(PrintlyDevice device) async {
     final String key = device.dedupKey;
-    // Reuse the transport [connect] chose for this session — the native
-    // side keys the session by `type:address`, so disconnecting with a
-    // different transport would silently miss it. Falls back to resolving
-    // fresh only for the defensive case of a disconnect with no prior
-    // recorded connect (state must already be non-disconnected to reach
-    // here, so this should not normally trigger).
-    final ConnectionType transport =
-        _transports[key] ?? resolveTransport(device, isIOS: Platform.isIOS);
     try {
+      // Reuse the transport [connect] chose for this session — the native
+      // side keys the session by `type:address`, so disconnecting with a
+      // different transport would silently miss it. Falls back to resolving
+      // fresh only for the defensive case of a disconnect with no prior
+      // recorded connect (state must already be non-disconnected to reach
+      // here, so this should not normally trigger).
+      final ConnectionType transport =
+          _transports[key] ?? resolveTransport(device, isIOS: Platform.isIOS);
       _emitLocal(device, ConnectionState.disconnecting);
       await _platform.disconnect(device: device, transport: transport);
     } finally {

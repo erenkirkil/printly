@@ -556,5 +556,25 @@ void main() {
       expect(platform.connectCalls, 1);
       expect(platform.disconnectCalls, 0);
     });
+
+    test(
+      'remembered-transport reconnect is a no-op when already connected',
+      () async {
+        // Establish connection over the default (classic on Android).
+        await establishDual();
+        expect(controller.transportOf(deviceDualMode), ConnectionType.classic);
+
+        // Reconnect with the remembered transport (facade-style call).
+        await controller.connect(
+          deviceDualMode,
+          transport: controller.transportOf(deviceDualMode),
+        );
+
+        // Should still be a no-op: no second native connect, no disconnect.
+        expect(platform.connectCalls, 1);
+        expect(platform.disconnectCalls, 0);
+        expect(controller.stateOf(deviceDualMode), ConnectionState.connected);
+      },
+    );
   });
 }
