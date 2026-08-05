@@ -31,6 +31,16 @@
   `requestPermissions()` so consumers no longer duplicate the API-level
   mapping.
 
+### Breaking
+
+- **Android:** `adapterState` no longer reports `unauthorized` when runtime
+  permissions are missing — it reports the actual radio state (or `unknown`
+  where the OS refuses to reveal it). The old behaviour froze the stream at
+  `unauthorized` until process restart because Android never re-broadcasts
+  on permission changes. Migration: gate UI on
+  `Printly.instance.checkPermissions()` for permission state;
+  `BluetoothAdapterState.unauthorized` still occurs on iOS.
+
 ## 0.1.0 — 2026-07-31
 
 First release. Bluetooth thermal printing for Flutter, written from scratch in

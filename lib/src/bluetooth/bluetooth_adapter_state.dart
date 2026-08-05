@@ -10,12 +10,15 @@ enum BluetoothAdapterState {
   /// Bluetooth is off. The user can enable it from system settings.
   poweredOff,
 
-  /// The app does not have permission to use Bluetooth.
+  /// The app is not authorised to use Bluetooth.
   ///
-  /// On iOS this maps to `CBManagerState.unauthorized`. On Android this
-  /// is synthesized by the plugin when required runtime permissions
-  /// (`BLUETOOTH_SCAN` / `BLUETOOTH_CONNECT` on API 31+, `BLUETOOTH` +
-  /// `ACCESS_FINE_LOCATION` on older releases) have not been granted.
+  /// Emitted only by iOS (`CBManagerState.unauthorized`), where CoreBluetooth
+  /// itself gates radio access behind the permission. Android stopped
+  /// synthesizing this value in 0.2.0: the plugin used to fold missing
+  /// runtime permissions into the adapter stream, but Android never
+  /// re-broadcasts on permission changes, so the value froze as
+  /// `unauthorized` until process restart. Query permissions with
+  /// `Printly.instance.checkPermissions()` instead.
   unauthorized,
 
   /// The device has no Bluetooth hardware or it is not supported.
