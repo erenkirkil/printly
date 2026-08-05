@@ -42,6 +42,11 @@
 - `startScan()` now picks a platform-appropriate default transport set when
   `types` is omitted (`{classic, ble}` on Android, `{ble}` on iOS) instead
   of always requesting Classic — see `ScanController.defaultScanTypesForPlatform`.
+- `Printly.transportOf()` / `ConnectionController.transportOf()` — the
+  `ConnectionType` `connect()` chose (or was explicitly told to use) for a
+  device: the active link's transport, or the last one used once
+  disconnected, or `null` if the device has never been connected this
+  session.
 
 ### Breaking
 
@@ -67,6 +72,21 @@
   iOS defaults to `{ble}` (it has no public Classic API). Pass an explicit
   `timeout`/`types` (or set `Printly.instance.defaultScanTimeout`) to keep
   the previous behaviour.
+- `connect()` now selects the transport (explicit `transport:` parameter to
+  override) instead of the interim `device.availableTransports.first`. The
+  default preference is platform-specific: Android prefers Classic for a
+  dual-mode radio (the field-proven RFCOMM path), iOS always uses BLE
+  (Classic requires MFi certification, out of scope — a Classic-only device
+  now rejects with `PrintlyUnsupportedException(classicRequiresMfi)` instead
+  of attempting a doomed connect). Switching an already-connected device to a
+  different transport on the same address requires passing an explicit,
+  different `transport:` — `connect()` with no transport, or the same one,
+  while already connected remains a no-op. `PrintlyPlatform.connect()` /
+  `disconnect()` / `write()` (the interface custom platform implementations
+  extend) gain a `required ConnectionType transport` parameter; the native
+  side keys sessions by `type:address`, so the three calls for one session
+  must always pass the same value — `ConnectionController.transportOf()`
+  is the retained per-device source of truth.
 
 ## 0.1.0 — 2026-07-31
 

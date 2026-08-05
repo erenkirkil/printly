@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:rxdart/rxdart.dart';
 
 import '../core/connection_event.dart';
 import '../core/connection_state.dart';
+import '../core/connection_type.dart';
 import '../core/printly_device.dart';
 import '../core/printly_exception.dart';
 import '../platform/printly_platform_interface.dart';
@@ -44,6 +46,7 @@ class ConnectionController {
       <String, BehaviorSubject<ConnectionState>>{};
   final Map<String, PrintlyDevice> _knownDevices = <String, PrintlyDevice>{};
   final Map<String, String?> _lastFailureReasons = <String, String?>{};
+  final Map<String, ConnectionType> _transports = <String, ConnectionType>{};
   final Map<String, _PendingConnect> _pendingConnects =
       <String, _PendingConnect>{};
   final Map<String, Future<void>> _pendingDisconnects =
@@ -78,6 +81,68 @@ class ConnectionController {
   String? lastFailureReasonOf(PrintlyDevice device) =>
       _lastFailureReasons[device.dedupKey];
 
+  /// The transport [connect] chose (or was told to use) for [device]: the
+  /// active link's transport, or the last one used if [device] is currently
+  /// disconnected. `null` if [device] has never been connected through this
+  /// controller.
+  ConnectionType? transportOf(PrintlyDevice device) =>
+      _transports[device.dedupKey];
+
+  /// Resolves which [ConnectionType] a [connect] call for [device] should
+  /// use. Pure and side-effect free, so it is independently testable.
+  ///
+  /// Rule, in order:
+  /// * [explicit] != `null` → use it, but only if it is one of
+  ///   [PrintlyDevice.availableTransports]; otherwise [ArgumentError].
+  /// * [PrintlyDevice.availableTransports] contains [ConnectionType.network]
+  ///   → [ConnectionType.network]. (In practice the facade's `connect()`
+  ///   fails fast with `PrintlyUnsupportedException(networkNotSupported)`
+  ///   before this function is ever reached for a network device, since that
+  ///   transport is not implemented yet — this branch exists so the pure
+  ///   rule stays total.)
+  /// * [isIOS] → [ConnectionType.ble] if available; otherwise
+  ///   [PrintlyUnsupportedException] with
+  ///   [PrintlyErrorCode.classicRequiresMfi] — iOS cannot open Bluetooth
+  ///   Classic links without MFi certification, so a Classic-only device has
+  ///   no usable transport on iOS.
+  /// * Otherwise (Android) → [ConnectionType.classic] if available (the
+  ///   field-proven, most reliable RFCOMM path for dual-mode radios),
+  ///   otherwise [ConnectionType.ble].
+  static ConnectionType resolveTransport(
+    PrintlyDevice device, {
+    required bool isIOS,
+    ConnectionType? explicit,
+  }) {
+    if (explicit != null) {
+      if (!device.availableTransports.contains(explicit)) {
+        throw ArgumentError.value(
+          explicit,
+          'explicit',
+          'not in device.availableTransports '
+              '(${device.availableTransports})',
+        );
+      }
+      return explicit;
+    }
+    if (device.availableTransports.contains(ConnectionType.network)) {
+      return ConnectionType.network;
+    }
+    if (isIOS) {
+      if (device.availableTransports.contains(ConnectionType.ble)) {
+        return ConnectionType.ble;
+      }
+      throw const PrintlyUnsupportedException(
+        PrintlyErrorCode.classicRequiresMfi,
+        'iOS cannot open Bluetooth Classic links without MFi certification; '
+        'connect over BLE instead.',
+      );
+    }
+    if (device.availableTransports.contains(ConnectionType.classic)) {
+      return ConnectionType.classic;
+    }
+    return ConnectionType.ble;
+  }
+
   /// Opens a link to [device].
   ///
   /// The returned future resolves only when the native side reports a terminal
@@ -87,7 +152,22 @@ class ConnectionController {
   /// elapses. So `await connect()` genuinely means "connected", not merely
   /// "the request was dispatched".
   ///
-  /// * If already connected to [device] → returns immediately.
+  /// [transport] picks which [ConnectionType] to use for a dual-mode radio;
+  /// see [resolveTransport] for the selection rule when it is omitted. The
+  /// chosen value is remembered ([transportOf]) and reused for the matching
+  /// [disconnect] and write calls — the native side keys a session by
+  /// `type:address`, so those calls must agree with the transport [connect]
+  /// actually used.
+  ///
+  /// * If already connected to [device] and [transport] is omitted or
+  ///   matches the active link's transport → returns immediately (the
+  ///   caller's intent, "be connected to this printer", is already met).
+  /// * If already connected to [device] over a *different* transport than
+  ///   the explicit [transport] requested (e.g. linked over Classic, caller
+  ///   now asks for BLE on the same dual-mode radio) → disconnects the old
+  ///   link first, then opens a fresh one over [transport]. A cross-transport
+  ///   switch always requires an explicit [transport]; omitting it never
+  ///   triggers a switch.
   /// * If a connect attempt is in flight for [device] → returns the same
   ///   future (re-entrancy safe), so duplicate taps never start a second
   ///   native attempt.
@@ -95,6 +175,7 @@ class ConnectionController {
   ///   then connects to [device] (serialised).
   Future<void> connect(
     PrintlyDevice device, {
+    ConnectionType? transport,
     Duration timeout = kDefaultConnectTimeout,
   }) {
     _assertNotDisposed();
@@ -102,9 +183,26 @@ class ConnectionController {
 
     final _PendingConnect? pending = _pendingConnects[key];
     if (pending != null) return pending.completer.future;
+
     if (stateOf(device) == ConnectionState.connected) {
-      return Future<void>.value();
+      final ConnectionType? active = _transports[key];
+      if (transport == null || active == transport) {
+        return Future<void>.value();
+      }
+      return _switchTransportThenConnect(device, transport, timeout);
     }
+
+    final ConnectionType chosen;
+    try {
+      chosen = resolveTransport(
+        device,
+        isIOS: Platform.isIOS,
+        explicit: transport,
+      );
+    } catch (error, stackTrace) {
+      return Future<void>.error(error, stackTrace);
+    }
+    _transports[key] = chosen;
 
     final Completer<void> completer = Completer<void>();
     final Timer timer = Timer(timeout, () {
@@ -123,11 +221,28 @@ class ConnectionController {
       timer,
       ignoreNextDisconnect: teardownInFlight,
     );
-    unawaited(_startConnect(device, timeout));
+    unawaited(_startConnect(device, chosen, timeout));
     return completer.future;
   }
 
-  Future<void> _startConnect(PrintlyDevice device, Duration timeout) async {
+  /// Cross-transport switch: tears down the link currently open over the
+  /// previously-chosen transport, then issues a fresh [connect] pinned to
+  /// [transport]. Used only from [connect] when the caller explicitly asks
+  /// for a transport that differs from the active one.
+  Future<void> _switchTransportThenConnect(
+    PrintlyDevice device,
+    ConnectionType transport,
+    Duration timeout,
+  ) async {
+    await disconnect(device: device);
+    await connect(device, transport: transport, timeout: timeout);
+  }
+
+  Future<void> _startConnect(
+    PrintlyDevice device,
+    ConnectionType transport,
+    Duration timeout,
+  ) async {
     final String key = device.dedupKey;
     try {
       final PrintlyDevice? previous = activeDevice;
@@ -140,7 +255,11 @@ class ConnectionController {
       // The native call returns as soon as the request is dispatched; the real
       // outcome arrives asynchronously via [connectionEvents] and resolves the
       // pending connect in [_onConnectionEvent] (or the timeout above fires).
-      await _platform.connect(device: device, timeout: timeout);
+      await _platform.connect(
+        device: device,
+        transport: transport,
+        timeout: timeout,
+      );
     } catch (error) {
       _lastFailureReasons[key] = error.toString();
       _emitLocal(device, ConnectionState.error);
@@ -186,9 +305,17 @@ class ConnectionController {
 
   Future<void> _runDisconnect(PrintlyDevice device) async {
     final String key = device.dedupKey;
+    // Reuse the transport [connect] chose for this session — the native
+    // side keys the session by `type:address`, so disconnecting with a
+    // different transport would silently miss it. Falls back to resolving
+    // fresh only for the defensive case of a disconnect with no prior
+    // recorded connect (state must already be non-disconnected to reach
+    // here, so this should not normally trigger).
+    final ConnectionType transport =
+        _transports[key] ?? resolveTransport(device, isIOS: Platform.isIOS);
     try {
       _emitLocal(device, ConnectionState.disconnecting);
-      await _platform.disconnect(device: device);
+      await _platform.disconnect(device: device, transport: transport);
     } finally {
       unawaited(_pendingDisconnects.remove(key));
     }

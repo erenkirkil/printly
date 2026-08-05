@@ -98,10 +98,14 @@ class DeviceTile extends StatelessWidget {
     );
   }
 
-  /// Picks a representative icon for [transports]. A dual-mode radio
-  /// (Classic + BLE) is shown with the BLE glyph — it is the transport
-  /// `connect()` will end up preferring once Task 3 lands explicit
-  /// selection.
+  /// Picks a representative icon for [transports] based on what the radio
+  /// advertises, not on which one `connect()` will actually pick — that
+  /// preference is platform-specific (Android prefers Classic for dual-mode
+  /// printers, iOS only ever uses BLE; see `ConnectionController.
+  /// resolveTransport`). A dual-mode radio (Classic + BLE) is shown with the
+  /// BLE glyph purely because BLE is checked first here; the combined
+  /// `classic+ble` text label from [_labelFor] is what actually distinguishes
+  /// dual-mode devices in the UI.
   static IconData _iconFor(Set<ConnectionType> transports) {
     if (transports.contains(ConnectionType.ble)) return Icons.bluetooth;
     if (transports.contains(ConnectionType.classic)) {

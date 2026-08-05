@@ -165,39 +165,55 @@ void main() {
     await subscription.cancel();
   });
 
-  test('connect forwards device payload and timeout', () async {
+  test('connect forwards device payload, transport, and timeout', () async {
     final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
       availableTransports: <ConnectionType>{ConnectionType.ble},
       name: 'Printer',
     );
-    await platform.connect(device: device, timeout: const Duration(seconds: 5));
+    await platform.connect(
+      device: device,
+      transport: ConnectionType.ble,
+      timeout: const Duration(seconds: 5),
+    );
     expect(invokedMethod, 'connect');
     final Map<Object?, Object?> args =
         invocations.single.arguments as Map<Object?, Object?>;
     expect(args['timeoutMs'], 5000);
     expect((args['device'] as Map<Object?, Object?>)['address'], 'AA:BB');
+    expect(
+      (args['device'] as Map<Object?, Object?>)['type'],
+      ConnectionType.ble.wireCode,
+    );
   });
 
-  test('disconnect forwards device payload', () async {
+  test('disconnect forwards device payload and transport', () async {
     final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
       availableTransports: <ConnectionType>{ConnectionType.ble},
     );
-    await platform.disconnect(device: device);
+    await platform.disconnect(device: device, transport: ConnectionType.ble);
     expect(invokedMethod, 'disconnect');
     final Map<Object?, Object?> args =
         invocations.single.arguments as Map<Object?, Object?>;
     expect((args['device'] as Map<Object?, Object?>)['address'], 'AA:BB');
+    expect(
+      (args['device'] as Map<Object?, Object?>)['type'],
+      ConnectionType.ble.wireCode,
+    );
   });
 
-  test('write forwards device payload and bytes', () async {
+  test('write forwards device payload, transport, and bytes', () async {
     final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
       availableTransports: <ConnectionType>{ConnectionType.classic},
     );
     final Uint8List bytes = Uint8List.fromList(<int>[0x1B, 0x40, 0x41]);
-    await platform.write(device: device, bytes: bytes);
+    await platform.write(
+      device: device,
+      transport: ConnectionType.classic,
+      bytes: bytes,
+    );
     expect(invokedMethod, 'write');
     final Map<Object?, Object?> args =
         invocations.single.arguments as Map<Object?, Object?>;
@@ -208,6 +224,45 @@ void main() {
     expect(args['bytes'], isA<Uint8List>());
     expect(args['bytes'], <int>[0x1B, 0x40, 0x41]);
   });
+
+  test(
+    'connect/disconnect/write send the SAME transport type for a dual-mode '
+    'device — the native side keys sessions by `type:address`, so a '
+    'mismatch across the three calls would silently miss the session',
+    () async {
+      final PrintlyDevice device = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{
+          ConnectionType.classic,
+          ConnectionType.ble,
+        },
+        name: 'Dual',
+      );
+      await platform.connect(
+        device: device,
+        transport: ConnectionType.ble,
+        timeout: const Duration(seconds: 5),
+      );
+      await platform.disconnect(device: device, transport: ConnectionType.ble);
+      await platform.write(
+        device: device,
+        transport: ConnectionType.ble,
+        bytes: Uint8List.fromList(<int>[1]),
+      );
+
+      expect(invocations, hasLength(3));
+      expect(invocations[0].method, 'connect');
+      expect(invocations[1].method, 'disconnect');
+      expect(invocations[2].method, 'write');
+      for (final MethodCall call in invocations) {
+        final Map<Object?, Object?> args =
+            call.arguments as Map<Object?, Object?>;
+        final Map<Object?, Object?> deviceMap =
+            args['device'] as Map<Object?, Object?>;
+        expect(deviceMap['type'], ConnectionType.ble.wireCode);
+      }
+    },
+  );
 
   group('typed error mapping', () {
     void throwOnInvoke(String code, String? message) {
@@ -247,7 +302,11 @@ void main() {
     test('write maps write_timeout even when the code is generic', () async {
       throwOnInvoke('write_failed', 'write_timeout');
       await expectLater(
-        platform.write(device: device, bytes: Uint8List.fromList(<int>[1])),
+        platform.write(
+          device: device,
+          transport: ConnectionType.ble,
+          bytes: Uint8List.fromList(<int>[1]),
+        ),
         throwsA(
           isA<PrintlyWriteException>().having(
             (PrintlyWriteException e) => e.code,
@@ -262,7 +321,11 @@ void main() {
         'PrintlyUnsupportedException', () async {
       throwOnInvoke('unsupported_platform', 'ios write ships in sprint 6');
       await expectLater(
-        platform.write(device: device, bytes: Uint8List.fromList(<int>[1])),
+        platform.write(
+          device: device,
+          transport: ConnectionType.ble,
+          bytes: Uint8List.fromList(<int>[1]),
+        ),
         throwsA(isA<PrintlyUnsupportedException>()),
       );
     });
@@ -270,7 +333,7 @@ void main() {
     test('unclassifiable errors keep the raw message under unknown', () async {
       throwOnInvoke('something_new', 'exotic native failure');
       await expectLater(
-        platform.connect(device: device),
+        platform.connect(device: device, transport: ConnectionType.ble),
         throwsA(
           isA<PrintlyConnectionException>()
               .having(

@@ -25,6 +25,7 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   @override
   Future<void> connect({
     required PrintlyDevice device,
+    required ConnectionType transport,
     Duration? timeout,
   }) async {
     connectCalls++;
@@ -32,7 +33,10 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   }
 
   @override
-  Future<void> disconnect({required PrintlyDevice device}) async {}
+  Future<void> disconnect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+  }) async {}
 
   @override
   Stream<PrintlyDevice> get scanResults => const Stream<PrintlyDevice>.empty();
