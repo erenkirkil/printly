@@ -228,6 +228,9 @@ class Printly {
   /// only reports whether the system request was shown. Returns `false` as
   /// a no-op when Bluetooth is already on. Watch [adapterState] for the
   /// real outcome (the user may dismiss the prompt without enabling it).
+  /// On iOS, `true` means the request was issued: the system may suppress
+  /// the alert when the radio is already on (unknowable without instantiating
+  /// a manager), and a never-authorized app gets the permission prompt instead.
   Future<bool> requestEnableBluetooth() {
     return PrintlyPlatform.instance.requestEnableBluetooth();
   }
@@ -276,8 +279,9 @@ class Printly {
   /// was originally started here or through a session.
   Future<void> stopScan() => _scan.stopScan();
 
-  /// Broadcast stream of discovered devices, deduplicated by transport +
-  /// address and emitted as an immutable list on each change.
+  /// Broadcast stream of discovered devices, deduplicated by address (Classic
+  /// and BLE sightings of one radio merge into a single record) and emitted as
+  /// an immutable list on each change.
   Stream<List<PrintlyDevice>> get devicesStream => _scan.devicesStream;
 
   /// Broadcast stream signalling whether a scan is currently running.
@@ -354,6 +358,8 @@ class Printly {
   /// being established is a well-known cause of connection failures, and the
   /// scan is wasted battery once the printer has been found either way. Call
   /// [stopScan] before this in the ordinary single-printer case.
+  /// A duplicate call while an attempt is in flight returns the pending
+  /// future and ignores a differing explicit [transport].
   Future<void> connect(
     PrintlyDevice device, {
     ConnectionType? transport,

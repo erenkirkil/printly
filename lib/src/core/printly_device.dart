@@ -115,7 +115,11 @@ class PrintlyDevice {
   /// Merges a fresh advertisement [other] (same [address]) into this record:
   /// transports union, [isBonded]/[seenInScan] OR (once seen, always seen —
   /// a bonded seed later confirmed by inquiry must not flip back), [name]
-  /// prefers the non-null newest, [rssi] prefers the latest reading.
+  /// prefers the non-null and non-blank newest, [rssi] prefers the latest
+  /// reading. A blank/whitespace advertised name (real BLE behavior) must not
+  /// clobber a genuine name learned from the other transport — that would flip
+  /// [hasName], render "(unnamed)" in UIs, and could trigger a spurious
+  /// classicFirst BLE fallback round.
   PrintlyDevice mergeWith(PrintlyDevice other) {
     assert(other.address == address, 'mergeWith requires the same address');
     return PrintlyDevice(
@@ -124,7 +128,7 @@ class PrintlyDevice {
         ...availableTransports,
         ...other.availableTransports,
       },
-      name: other.name ?? name,
+      name: (other.hasName ? other.name : null) ?? name,
       rssi: other.rssi ?? rssi,
       isBonded: isBonded || other.isBonded,
       seenInScan: seenInScan || other.seenInScan,

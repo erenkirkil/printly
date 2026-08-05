@@ -145,6 +145,21 @@ void main() {
       expect(merged.name, 'PTP-II');
       expect(merged.rssi, -55);
     });
+
+    test('mergeWith keeps a real name over a blank advertised one', () {
+      final PrintlyDevice named = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.classic},
+        name: 'PTP-II',
+      );
+      final PrintlyDevice blankAd = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.ble},
+        name: '  ',
+      );
+      expect(named.mergeWith(blankAd).name, 'PTP-II');
+      expect(named.mergeWith(blankAd).hasName, isTrue);
+    });
   });
 
   group('PrintlyDevice JSON round-trip', () {
