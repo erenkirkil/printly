@@ -292,6 +292,99 @@ void main() {
     });
   });
 
+  group('field-informed defaults + seenInScan + includeBonded', () {
+    test('same address over Classic and BLE yields ONE record with both '
+        'transports', () async {
+      await controller.startScan(timeout: const Duration(days: 1));
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+          name: 'PTP-II',
+        ),
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+          rssi: -58,
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+      expect(
+        controller.currentDevices.single.availableTransports,
+        <ConnectionType>{ConnectionType.classic, ConnectionType.ble},
+      );
+      expect(controller.currentDevices.single.name, 'PTP-II');
+    });
+
+    test('a bonded seed later seen in inquiry updates the SAME record to '
+        'seenInScan', () async {
+      await controller.startScan(timeout: const Duration(days: 1));
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          isBonded: true,
+          seenInScan: false,
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices.single.seenInScan, isFalse);
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+      expect(controller.currentDevices.single.seenInScan, isTrue);
+    });
+
+    test('includeBonded: false drops bonded-only seeds but keeps devices '
+        'actually seen', () async {
+      await controller.startScan(
+        timeout: const Duration(days: 1),
+        includeBonded: false,
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          isBonded: true,
+          seenInScan: false,
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'CC:DD',
+          isBonded: true,
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+      expect(controller.currentDevices.single.address, 'CC:DD');
+    });
+
+    test('defaultScanTypesForPlatform: iOS never asks for classic', () {
+      expect(
+        ScanController.defaultScanTypesForPlatform(isIOS: true),
+        <ConnectionType>{ConnectionType.ble},
+      );
+      expect(
+        ScanController.defaultScanTypesForPlatform(isIOS: false),
+        <ConnectionType>{ConnectionType.classic, ConnectionType.ble},
+      );
+    });
+
+    test('kDefaultScanTimeout is 10 seconds', () {
+      expect(kDefaultScanTimeout, const Duration(seconds: 10));
+    });
+  });
+
   group('emission coalescing', () {
     test('collapses a burst of advertisements into one emission', () async {
       final ScanController coalesced = ScanController(

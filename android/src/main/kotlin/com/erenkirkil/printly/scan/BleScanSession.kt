@@ -75,6 +75,7 @@ internal class BleScanSession(
             if (name != null) put(WireCodes.Keys.NAME, name)
             put(WireCodes.Keys.RSSI, result.rssi)
             put(WireCodes.Keys.IS_BONDED, bonded)
+            put(WireCodes.Keys.SEEN_IN_SCAN, true)
         })
     }
 }

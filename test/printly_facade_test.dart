@@ -92,6 +92,11 @@ void main() {
       await pumpEventQueue();
 
       expect(printly.lastConnectedDevice, device);
+      // Equality is address-only (C1) — assert availableTransports too.
+      expect(
+        printly.lastConnectedDevice!.availableTransports,
+        device.availableTransports,
+      );
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       final String? raw = prefs.getString(_deviceKey);
       expect(raw, isNotNull);
@@ -139,8 +144,16 @@ void main() {
       await pumpEventQueue();
 
       expect(printly.lastConnectedDevice, device);
+      expect(
+        printly.lastConnectedDevice!.availableTransports,
+        device.availableTransports,
+      );
       await printly.loadLastConnectedDevice();
       expect(printly.lastConnectedDevice, device);
+      expect(
+        printly.lastConnectedDevice!.availableTransports,
+        device.availableTransports,
+      );
     });
   });
 
@@ -154,7 +167,9 @@ void main() {
       final Printly printly = Printly.forTesting();
 
       // The documented restore path: just load the persisted device.
-      expect(await printly.loadLastConnectedDevice(), device);
+      final PrintlyDevice? loaded = await printly.loadLastConnectedDevice();
+      expect(loaded, device);
+      expect(loaded!.availableTransports, device.availableTransports);
       expect(printly.isAutoReconnectEnabled, isTrue);
 
       // Adapter comes back — the restored flag must act on its own.

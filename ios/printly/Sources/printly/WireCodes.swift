@@ -79,6 +79,7 @@ extension WireCodes {
         static let isBonded = "isBonded"
         static let state = "state"
         static let failureReason = "failureReason"
+        static let seenInScan = "seenInScan"
     }
 
     /// Machine-readable error strings — `PrintlyErrorCode.wireName` on the

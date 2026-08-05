@@ -33,6 +33,15 @@
 - `PrintlyDevice.seenInScan` — distinguishes a bonded seed from an actual
   scan sighting (`false` may not currently be in range).
 - `PrintlyDevice.hasName` — whether `name` is present and non-blank.
+- `Printly.startScan()`/`ScanController.startScan()` gain `includeBonded`
+  (default `true`) — set `false` to exclude Classic bonded-cache seeds from
+  `devicesStream` until they are actually confirmed by an inquiry result.
+- `Printly.defaultScanTimeout` — mutable app-wide default applied to
+  `startScan()` calls that pass no explicit `timeout`, instead of every call
+  site repeating a custom `Duration`.
+- `startScan()` now picks a platform-appropriate default transport set when
+  `types` is omitted (`{classic, ble}` on Android, `{ble}` on iOS) instead
+  of always requesting Classic — see `ScanController.defaultScanTypesForPlatform`.
 
 ### Breaking
 
@@ -49,7 +58,15 @@
   address, and equality is address-only. Transport selection moved to
   `connect()`. Persisted last-device entries from 0.1.x are migrated
   automatically. Migration: replace `device.type` reads with
-  `device.availableTransports`.
+  `device.availableTransports`. `availableTransports` is validated with a
+  runtime assert (non-empty), which `const` evaluation cannot satisfy — any
+  0.1.x `const PrintlyDevice(...)` call site no longer compiles and must
+  drop the `const`.
+- `kDefaultScanTimeout` drops from 30 s to 10 s, and `startScan()`'s default
+  transport set is now platform-aware instead of always `{classic, ble}` —
+  iOS defaults to `{ble}` (it has no public Classic API). Pass an explicit
+  `timeout`/`types` (or set `Printly.instance.defaultScanTimeout`) to keep
+  the previous behaviour.
 
 ## 0.1.0 — 2026-07-31
 
