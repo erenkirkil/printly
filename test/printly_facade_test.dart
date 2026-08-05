@@ -15,6 +15,8 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
 
   int connectCalls = 0;
   final List<PrintlyDevice> connectDevices = <PrintlyDevice>[];
+  int requestEnableBluetoothCalls = 0;
+  bool requestEnableBluetoothResult = true;
 
   @override
   Stream<PrintlyConnectionEvent> get connectionEvents => events.stream;
@@ -46,6 +48,12 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
 
   @override
   Future<void> stopScan() async {}
+
+  @override
+  Future<bool> requestEnableBluetooth() async {
+    requestEnableBluetoothCalls++;
+    return requestEnableBluetoothResult;
+  }
 
   Future<void> close() async {
     await events.close();
@@ -204,6 +212,24 @@ void main() {
       platform.adapter.add(BluetoothAdapterState.poweredOn);
       await pumpEventQueue();
       expect(platform.connectCalls, 0);
+    });
+  });
+
+  group('requestEnableBluetooth', () {
+    test('delegates to the platform and returns its flag', () async {
+      final Printly printly = Printly.forTesting();
+      platform.requestEnableBluetoothResult = true;
+
+      expect(await printly.requestEnableBluetooth(), isTrue);
+      expect(platform.requestEnableBluetoothCalls, 1);
+    });
+
+    test('passes through a false (already-on / no-op) result', () async {
+      final Printly printly = Printly.forTesting();
+      platform.requestEnableBluetoothResult = false;
+
+      expect(await printly.requestEnableBluetooth(), isFalse);
+      expect(platform.requestEnableBluetoothCalls, 1);
     });
   });
 }

@@ -36,6 +36,8 @@ void main() {
               return 31;
             case 'openBluetoothSettings':
               return true;
+            case 'requestEnableBluetooth':
+              return true;
             default:
               return null;
           }
@@ -66,6 +68,29 @@ void main() {
   test('getAndroidSdkInt delegates and unwraps the int', () async {
     expect(await platform.getAndroidSdkInt(), 31);
     expect(invokedMethod, 'getAndroidSdkInt');
+  });
+
+  test(
+    'requestEnableBluetooth invokes the wire method and returns the flag',
+    () async {
+      expect(await platform.requestEnableBluetooth(), isTrue);
+      expect(invocations.single.method, 'requestEnableBluetooth');
+    },
+  );
+
+  test('requestEnableBluetooth maps permission_denied to '
+      'PrintlyPermissionException', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(methodChannel, (MethodCall call) async {
+          throw PlatformException(
+            code: 'permission_denied',
+            message: 'bluetooth_connect_required',
+          );
+        });
+    await expectLater(
+      platform.requestEnableBluetooth(),
+      throwsA(isA<PrintlyPermissionException>()),
+    );
   });
 
   test('adapterState decodes integer events into enum values', () async {

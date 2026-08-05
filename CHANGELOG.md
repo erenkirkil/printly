@@ -66,6 +66,17 @@
   only if needed) surfaces printers a parallel scan can miss under
   contention. No-op two-round loop — there is never a third round. On iOS it
   degrades silently to a single BLE round.
+- `Printly.requestEnableBluetooth()` — asks the user to turn Bluetooth on
+  without leaving the app. On Android this shows the system
+  `ACTION_REQUEST_ENABLE` dialog over the current activity (rejects with
+  `PrintlyPermissionException` on API 31+ when `BLUETOOTH_CONNECT` has not
+  been granted). On iOS there is no programmatic toggle, so it creates a
+  short-lived `CBCentralManager` with `CBCentralManagerOptionShowPowerAlertKey`
+  — Apple's only sanctioned "turn it on" prompt, whose own "Settings" button
+  legitimately deep-links to the system Bluetooth pane (something
+  `openBluetoothSettings()` cannot do). Returns whether the request was
+  **shown**, not whether the radio ended up on — watch `adapterState` for
+  the actual outcome.
 
 ### Breaking
 

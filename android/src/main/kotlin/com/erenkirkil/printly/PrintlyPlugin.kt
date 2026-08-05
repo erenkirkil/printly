@@ -5,10 +5,12 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import com.erenkirkil.printly.adapter.AdapterStateStreamHandler
 import com.erenkirkil.printly.connection.ConnectionCoordinator
 import com.erenkirkil.printly.connection.ConnectionEventsStreamHandler
 import com.erenkirkil.printly.scan.ScanResultsStreamHandler
+import com.erenkirkil.printly.util.PermissionChecker
 import com.erenkirkil.printly.util.WireCodes
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -103,6 +105,7 @@ class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
                 result.success("Android ${Build.VERSION.RELEASE}")
             WireCodes.Methods.GET_ANDROID_SDK_INT -> result.success(Build.VERSION.SDK_INT)
             WireCodes.Methods.OPEN_BLUETOOTH_SETTINGS -> result.success(openBluetoothSettings())
+            WireCodes.Methods.REQUEST_ENABLE_BLUETOOTH -> handleRequestEnableBluetooth(result)
             WireCodes.Methods.START_SCAN -> handleStartScan(call, result)
             WireCodes.Methods.STOP_SCAN -> handleStopScan(result)
             WireCodes.Methods.CONNECT -> handleConnect(call, result)
@@ -186,6 +189,53 @@ class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
                 result.error(code, error.message, null)
             }
         }
+    }
+
+    /**
+     * Shows the system "turn Bluetooth on" dialog (`ACTION_REQUEST_ENABLE`)
+     * over the current activity — the app is never backgrounded. Returns
+     * `false` as a no-op when the adapter is unavailable or already
+     * enabled; the caller must watch the adapter-state stream for the
+     * user's actual decision, since this only reports whether the dialog
+     * was shown.
+     */
+    private fun handleRequestEnableBluetooth(result: Result) {
+        val adapter = ContextCompat.getSystemService(
+            appContext,
+            android.bluetooth.BluetoothManager::class.java,
+        )?.adapter
+        if (adapter == null) {
+            result.success(false)
+            return
+        }
+        val enabled = try { adapter.isEnabled } catch (_: SecurityException) { false }
+        if (enabled) {
+            result.success(false)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 31 &&
+            !PermissionChecker.hasConnect(appContext)
+        ) {
+            // The system dialog itself requires BLUETOOTH_CONNECT on 12+;
+            // failing fast with the shared wire reason lets Dart surface the
+            // typed permission exception instead of a mystery no-op.
+            result.error(WireCodes.Reasons.PERMISSION_DENIED, "bluetooth_connect_required", null)
+            return
+        }
+        val launcher: Context = activity ?: appContext
+        val intent = Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_ENABLE).apply {
+            if (launcher !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        result.success(
+            try {
+                launcher.startActivity(intent)
+                true
+            } catch (_: SecurityException) {
+                false
+            } catch (_: Exception) {
+                false
+            },
+        )
     }
 
     private fun openBluetoothSettings(): Boolean {
