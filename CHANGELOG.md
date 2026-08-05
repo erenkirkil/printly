@@ -8,6 +8,9 @@
   connect died on the 10 s timeout. Discovery is now chained after the MTU
   exchange settles, with a 1.5 s fallback so a missing `onMtuChanged` can
   never wedge the connect.
+- `PrintJob.barcode()` now throws `ArgumentError` for CODE128 payloads
+  containing non-encodable characters, as its documentation always
+  promised — previously such payloads silently printed a corrupt symbol.
 
 ### Added
 
