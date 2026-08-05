@@ -9,6 +9,7 @@ import 'bluetooth/bluetooth_manager.dart';
 import 'bluetooth/connection_controller.dart';
 import 'bluetooth/last_device_store.dart';
 import 'bluetooth/scan_controller.dart';
+import 'bluetooth/scan_session.dart';
 import 'core/bluetooth_permission_set.dart';
 import 'core/connection_state.dart';
 import 'core/connection_type.dart';
@@ -259,6 +260,22 @@ class Printly {
 
   /// Clears the accumulated device list without stopping an active scan.
   void clearDevices() => _scan.clearDevices();
+
+  /// Creates a new screen-scoped [PrintlyScanSession].
+  ///
+  /// Unlike [devicesStream]/[isScanningStream] — process-lifetime streams
+  /// that replay their last value into every new subscriber — a session
+  /// seeds `devices`/`isScanning` empty/`false` and only starts forwarding
+  /// controller events once its own `start()` is called. See
+  /// [PrintlyScanSession] for the three field bugs this avoids. Create one
+  /// per screen (e.g. in `initState`) and call `dispose()` on it (e.g. in
+  /// `dispose`); an in-flight session's `start()` without an explicit
+  /// `timeout` uses [defaultScanTimeout] at the time `start()` runs, not at
+  /// the time this method was called.
+  PrintlyScanSession newScanSession() => createScanSession(
+    controller: _scan,
+    resolveDefaultTimeout: () => defaultScanTimeout,
+  );
 
   /// Opens a link to [device]. Idempotent for duplicate taps and serialises
   /// switching between two devices (disconnect current, then connect new).
