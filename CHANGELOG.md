@@ -24,6 +24,10 @@
 - `PrintJob.barcode()` gains the same `unmappable` policy for CODE128 and
   CODE39 (symbology-aware: numeric symbologies still validate strictly,
   CODE39 folds lowercase and defaults its replacement to `-`).
+- `Printly.checkPermissions()` — reads the current permission status
+  without ever prompting, evaluating exactly the same permission set as
+  `requestPermissions()` so consumers no longer duplicate the API-level
+  mapping.
 
 ## 0.1.0 — 2026-07-31
 
