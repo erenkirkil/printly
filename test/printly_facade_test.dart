@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:printly/printly.dart';
+import 'package:printly/src/bluetooth/connection_controller.dart';
 import 'package:printly/src/platform/printly_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -17,6 +20,8 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   final List<PrintlyDevice> connectDevices = <PrintlyDevice>[];
   int requestEnableBluetoothCalls = 0;
   bool requestEnableBluetoothResult = true;
+  int writeCalls = 0;
+  ConnectionType? lastWriteTransport;
 
   @override
   Stream<PrintlyConnectionEvent> get connectionEvents => events.stream;
@@ -55,6 +60,16 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
     return requestEnableBluetoothResult;
   }
 
+  @override
+  Future<void> write({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+    required Uint8List bytes,
+  }) async {
+    writeCalls++;
+    lastWriteTransport = transport;
+  }
+
   Future<void> close() async {
     await events.close();
     await adapter.close();
@@ -65,6 +80,17 @@ final PrintlyDevice device = PrintlyDevice(
   address: 'AA:BB:CC:DD:EE:FF',
   availableTransports: <ConnectionType>{ConnectionType.classic},
   name: 'PTP-II',
+);
+
+/// A never-connected dual-mode device, used to exercise `print()`'s
+/// transport-fallback path (see the `print() transport fallback` group).
+final PrintlyDevice dualModeDevice = PrintlyDevice(
+  address: '11:22:33:44:55:66',
+  availableTransports: <ConnectionType>{
+    ConnectionType.classic,
+    ConnectionType.ble,
+  },
+  name: 'Dual-mode printer',
 );
 
 const String _deviceKey = 'printly.last_connected_device';
@@ -231,5 +257,65 @@ void main() {
       expect(await printly.requestEnableBluetooth(), isFalse);
       expect(platform.requestEnableBluetoothCalls, 1);
     });
+  });
+
+  group('print() transport fallback', () {
+    late CapabilityProfile profile;
+
+    setUpAll(() async {
+      profile = await CapabilityProfile.load();
+    });
+
+    PrintJob job() =>
+        PrintJob.fromGenerator(generator: Generator(PaperSize.mm58, profile));
+
+    test('a never-connected device resolves its transport via '
+        'resolveTransport() instead of requiring a prior connect()', () async {
+      final Printly printly = Printly.forTesting();
+
+      // dualModeDevice has never been passed to connect(), so
+      // ConnectionController.transportOf() is null and print() must fall
+      // back to ConnectionController.resolveTransport(). The test host is
+      // neither iOS nor Android, so the real Platform.isIOS reads false
+      // inside resolveTransport and it takes the same "Android" branch
+      // exercised directly in connection_controller_test.dart — classic
+      // wins for a dual-mode device.
+      await printly.print(dualModeDevice, job());
+
+      expect(platform.writeCalls, 1);
+      expect(platform.lastWriteTransport, ConnectionType.classic);
+      expect(platform.connectCalls, 0); // print() never connects first.
+    });
+
+    test(
+      'iOS classic-only device: PrintlyUnsupportedException(classicRequiresMfi) '
+      'is the error print() would surface as a Future rejection',
+      () {
+        // Printly.print() resolves the transport with
+        // ConnectionController.resolveTransport(device, isIOS: Platform.isIOS)
+        // — the real dart:io Platform.isIOS, not an injectable seam
+        // (verified: IOOverrides only covers File/Directory/Socket, not
+        // Platform). A host-run unit test can therefore never drive print()
+        // itself down the iOS branch to observe the wrapping
+        // `Future<void>.error(error, stackTrace)` in printly_base.dart's
+        // catch clause. What's independently testable — and is tested here
+        // — is that resolveTransport (the function print() delegates to)
+        // throws exactly PrintlyUnsupportedException(classicRequiresMfi) for
+        // a classic-only device under the iOS rule, which is the value that
+        // catch clause would forward. See also the "resolveTransport (pure)"
+        // group in connection_controller_test.dart for the same contract
+        // exercised directly against resolveTransport.
+        expect(
+          () => ConnectionController.resolveTransport(device, isIOS: true),
+          throwsA(
+            isA<PrintlyUnsupportedException>().having(
+              (PrintlyUnsupportedException e) => e.code,
+              'code',
+              PrintlyErrorCode.classicRequiresMfi,
+            ),
+          ),
+        );
+      },
+    );
   });
 }

@@ -1,82 +1,9 @@
 ## 0.2.0
 
-### Fixed
-
-- **Android BLE:** `requestMtu()` and `discoverServices()` were issued
-  back-to-back, racing on the single-operation GATT queue; on some stacks
-  (observed on Android 11) discovery was silently dropped and every BLE
-  connect died on the 10 s timeout. Discovery is now chained after the MTU
-  exchange settles, with a 1.5 s fallback so a missing `onMtuChanged` can
-  never wedge the connect. Callers passing very short custom connect
-  timeouts should note the MTU exchange may now occupy up to the first
-  1.5 s of the budget.
-- `PrintJob.barcode()` now throws `ArgumentError` for CODE128 payloads
-  containing non-encodable characters, as its documentation always
-  promised — previously such payloads silently printed a corrupt symbol.
-
-### Added
-
-- `TurkishCodePage.toLatin1()` — public sanitization helper that makes any
-  string Latin-1 safe, transliterating Turkish letters and typographic
-  punctuation to readable ASCII.
-- `PrintJob.qr()` now accepts `unmappable: PrintlyUnmappable` (default
-  `throwError`, unchanged) and `replacement`, so field input containing
-  `₺`, smart quotes or em dashes can print a sanitized QR instead of
-  throwing.
-- `PrintJob.barcode()` gains the same `unmappable` policy for CODE128 and
-  CODE39 (symbology-aware: numeric symbologies still validate strictly,
-  CODE39 folds lowercase and defaults its replacement to `-`).
-- `Printly.checkPermissions()` — reads the current permission status
-  without ever prompting, evaluating exactly the same permission set as
-  `requestPermissions()` so consumers no longer duplicate the API-level
-  mapping.
-- `PrintlyDevice.seenInScan` — distinguishes a bonded seed from an actual
-  scan sighting (`false` may not currently be in range).
-- `PrintlyDevice.hasName` — whether `name` is present and non-blank.
-- `Printly.startScan()`/`ScanController.startScan()` gain `includeBonded`
-  (default `true`) — set `false` to exclude Classic bonded-cache seeds from
-  `devicesStream` until they are actually confirmed by an inquiry result.
-- `Printly.defaultScanTimeout` — mutable app-wide default applied to
-  `startScan()` calls that pass no explicit `timeout`, instead of every call
-  site repeating a custom `Duration`.
-- `startScan()` now picks a platform-appropriate default transport set when
-  `types` is omitted (`{classic, ble}` on Android, `{ble}` on iOS) instead
-  of always requesting Classic — see `ScanController.defaultScanTypesForPlatform`.
-- `Printly.transportOf()` / `ConnectionController.transportOf()` — the
-  `ConnectionType` `connect()` chose (or was explicitly told to use) for a
-  device: the active link's transport, or the last one used once
-  disconnected, or `null` if the device has never been connected this
-  session.
-- `Printly.newScanSession()` / `PrintlyScanSession` — a screen-scoped scan
-  handle whose `devices`/`isScanning` streams are seeded empty/`false` and
-  never replay a previous screen's state, unlike the process-lifetime
-  `devicesStream`/`isScanningStream`. Encodes three field bugs traced to
-  that replay landing in a fresh screen: a stale `isScanning: false`
-  clobbering optimistic "scanning…" UI, a replay misread as "scan finished,
-  nothing found" triggering a phantom BLE fallback, and a two-minute-old
-  42-device list rendering before the new scan started (a tap on it ended in
-  a connect timeout). `stop()` is ref-counted across concurrently active
-  sessions — the native scan only stops once the last one lets go.
-- `ScanStrategy` / `Printly.startScan()`'s new `strategy` parameter (default
-  `ScanStrategy.parallel`, current behaviour unchanged) — pass
-  `ScanStrategy.classicFirst` to scan Bluetooth Classic first on Android and
-  fall back to a single BLE round only when nothing named answered, instead
-  of requesting both transports at once. Encodes a field-observed pattern: a
-  Classic inquiry saturates the radio, so scanning it alone first (then BLE
-  only if needed) surfaces printers a parallel scan can miss under
-  contention. No-op two-round loop — there is never a third round. On iOS it
-  degrades silently to a single BLE round.
-- `Printly.requestEnableBluetooth()` — asks the user to turn Bluetooth on
-  without leaving the app. On Android this shows the system
-  `ACTION_REQUEST_ENABLE` dialog over the current activity (rejects with
-  `PrintlyPermissionException` on API 31+ when `BLUETOOTH_CONNECT` has not
-  been granted). On iOS there is no programmatic toggle, so it creates a
-  short-lived `CBCentralManager` with `CBCentralManagerOptionShowPowerAlertKey`
-  — Apple's only sanctioned "turn it on" prompt, whose own "Settings" button
-  legitimately deep-links to the system Bluetooth pane (something
-  `openBluetoothSettings()` cannot do). Returns whether the request was
-  **shown**, not whether the radio ended up on — watch `adapterState` for
-  the actual outcome.
+Merges Classic/BLE sightings of one printer into a single `PrintlyDevice`
+with transport selection moved to `connect()`, adds QR/barcode Unicode
+sanitization and the `TurkishCodePage.toLatin1()` helper, splits adapter
+state from permission state, and fixes an Android BLE GATT discovery race.
 
 ### Breaking
 
@@ -117,6 +44,84 @@
   side keys sessions by `type:address`, so the three calls for one session
   must always pass the same value — `ConnectionController.transportOf()`
   is the retained per-device source of truth.
+
+### Added
+
+- `TurkishCodePage.toLatin1()` — public sanitization helper that makes any
+  string Latin-1 safe, transliterating Turkish letters and typographic
+  punctuation to readable ASCII.
+- `PrintJob.qr()` now accepts `unmappable: PrintlyUnmappable` (default
+  `throwError`, unchanged) and `replacement`, so field input containing
+  `₺`, smart quotes or em dashes can print a sanitized QR instead of
+  throwing.
+- `PrintJob.barcode()` gains the same `unmappable` policy for CODE128 and
+  CODE39 (symbology-aware: numeric symbologies still validate strictly,
+  CODE39 folds lowercase and defaults its replacement to `-`).
+- `Printly.checkPermissions()` — reads the current permission status
+  without ever prompting, evaluating exactly the same permission set as
+  `requestPermissions()` so consumers no longer duplicate the API-level
+  mapping.
+- `PrintlyDevice.seenInScan` — distinguishes a bonded seed from an actual
+  scan sighting (`false` may not currently be in range).
+- `PrintlyDevice.hasName` — whether `name` is present and non-blank.
+- `Printly.startScan()`/`ScanController.startScan()` gain `includeBonded`
+  (default `true`) — set `false` to exclude Classic bonded-cache seeds from
+  `devicesStream` until they are actually confirmed by an inquiry result.
+- `Printly.defaultScanTimeout` — mutable app-wide default applied to
+  `startScan()` calls that pass no explicit `timeout`, instead of every call
+  site repeating a custom `Duration`.
+- `startScan()` now picks a platform-appropriate default transport set when
+  `types` is omitted (`{classic, ble}` on Android, `{ble}` on iOS) instead
+  of always requesting Classic — see `ScanController.defaultScanTypesForPlatform`.
+- `Printly.transportOf()` / `ConnectionController.transportOf()` — the
+  `ConnectionType` `connect()` chose (or was explicitly told to use) for a
+  device: the active link's transport, or the last one used once
+  disconnected, or `null` if the device has never been attempted this
+  session.
+- `Printly.newScanSession()` / `PrintlyScanSession` — a screen-scoped scan
+  handle whose `devices`/`isScanning` streams are seeded empty/`false` and
+  never replay a previous screen's state, unlike the process-lifetime
+  `devicesStream`/`isScanningStream`. Encodes three field bugs traced to
+  that replay landing in a fresh screen: a stale `isScanning: false`
+  clobbering optimistic "scanning…" UI, a replay misread as "scan finished,
+  nothing found" triggering a phantom BLE fallback, and a two-minute-old
+  42-device list rendering before the new scan started (a tap on it ended in
+  a connect timeout). `stop()` is ref-counted across concurrently active
+  sessions — the native scan only stops once the last one lets go.
+- `ScanStrategy` / `Printly.startScan()`'s new `strategy` parameter (default
+  `ScanStrategy.parallel`, current behaviour unchanged) — pass
+  `ScanStrategy.classicFirst` to scan Bluetooth Classic first on Android and
+  fall back to a single BLE round only when nothing named answered, instead
+  of requesting both transports at once. Encodes a field-observed pattern: a
+  Classic inquiry saturates the radio, so scanning it alone first (then BLE
+  only if needed) surfaces printers a parallel scan can miss under
+  contention. No-op two-round loop — there is never a third round. On iOS it
+  degrades silently to a single BLE round.
+- `Printly.requestEnableBluetooth()` — asks the user to turn Bluetooth on
+  without leaving the app. On Android this shows the system
+  `ACTION_REQUEST_ENABLE` dialog over the current activity (rejects with
+  `PrintlyPermissionException` on API 31+ when `BLUETOOTH_CONNECT` has not
+  been granted). On iOS there is no programmatic toggle, so it creates a
+  short-lived `CBCentralManager` with `CBCentralManagerOptionShowPowerAlertKey`
+  — Apple's only sanctioned "turn it on" prompt, whose own "Settings" button
+  legitimately deep-links to the system Bluetooth pane (something
+  `openBluetoothSettings()` cannot do). Returns whether the request was
+  **shown**, not whether the radio ended up on — watch `adapterState` for
+  the actual outcome.
+
+### Fixed
+
+- **Android BLE:** `requestMtu()` and `discoverServices()` were issued
+  back-to-back, racing on the single-operation GATT queue; on some stacks
+  (observed on Android 11) discovery was silently dropped and every BLE
+  connect died on the 10 s timeout. Discovery is now chained after the MTU
+  exchange settles, with a 1.5 s fallback so a missing `onMtuChanged` can
+  never wedge the connect. Callers passing very short custom connect
+  timeouts should note the MTU exchange may now occupy up to the first
+  1.5 s of the budget.
+- `PrintJob.barcode()` now throws `ArgumentError` for CODE128 payloads
+  containing non-encodable characters, as its documentation always
+  promised — previously such payloads silently printed a corrupt symbol.
 
 ## 0.1.0 — 2026-07-31
 

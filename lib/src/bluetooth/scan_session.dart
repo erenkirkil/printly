@@ -195,8 +195,11 @@ class PrintlyScanSession {
       includeBonded: includeBonded,
       strategy: strategy,
     );
+    // stop()/dispose() may have landed while the await above was in flight;
+    // arming and pushing a snapshot for a session that already let go would
+    // be a spurious emission (C5 re-review residual).
+    if (_disposed || !_running) return;
     _armed = true;
-    if (_disposed) return;
     final List<PrintlyDevice> devicesSnapshot = _controller.currentDevices;
     if (!_sameDevices(devicesSnapshot, _devicesSubject.value)) {
       _devicesSubject.add(devicesSnapshot);
