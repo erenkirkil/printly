@@ -200,9 +200,36 @@ class Printly {
   ///
   /// On Android this uses `Settings.ACTION_BLUETOOTH_SETTINGS`. iOS offers
   /// no public deep link to the Bluetooth pane, so the app's own settings
-  /// page is opened instead.
+  /// page is opened instead — **this cannot turn the radio on**. If the
+  /// radio itself is off, use [requestEnableBluetooth] instead.
   Future<bool> openBluetoothSettings() {
     return PrintlyPlatform.instance.openBluetoothSettings();
+  }
+
+  /// Asks the user to turn Bluetooth on, in place, without leaving the app.
+  ///
+  /// On Android this shows the system `ACTION_REQUEST_ENABLE` dialog over
+  /// the current activity — the app is never backgrounded. On Android 12+
+  /// (API 31+) showing that dialog itself requires the `BLUETOOTH_CONNECT`
+  /// runtime permission; when it is missing this rejects with a
+  /// [PrintlyPermissionException] instead of silently doing nothing (call
+  /// [requestPermissions] first, or check [checkPermissions]).
+  ///
+  /// On iOS there is no programmatic way to toggle the radio, and
+  /// [openBluetoothSettings] cannot reach the system Bluetooth pane — Apple
+  /// only exposes `App-Prefs:Bluetooth`, a private URL scheme that risks App
+  /// Store rejection under guideline 2.5.1. Instead, this creates a
+  /// short-lived `CBCentralManager` with the `CBCentralManagerOptionShowPowerAlertKey`
+  /// option, which is Apple's one sanctioned "Bluetooth is off" system
+  /// alert; that alert's own "Settings" button legitimately deep-links to
+  /// the system Bluetooth pane, something this SDK cannot do on its own.
+  ///
+  /// **This call does not wait for the radio to actually turn on** — it
+  /// only reports whether the system request was shown. Returns `false` as
+  /// a no-op when Bluetooth is already on. Watch [adapterState] for the
+  /// real outcome (the user may dismiss the prompt without enabling it).
+  Future<bool> requestEnableBluetooth() {
+    return PrintlyPlatform.instance.requestEnableBluetooth();
   }
 
   /// Opens this application's system settings page so the user can review

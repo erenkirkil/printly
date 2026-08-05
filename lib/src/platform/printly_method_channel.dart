@@ -99,6 +99,22 @@ class MethodChannelPrintly extends PrintlyPlatform {
   }
 
   @override
+  Future<bool> requestEnableBluetooth() async {
+    // Unlike the void-returning calls above, this needs to both unwrap a
+    // bool *and* map errors, so it cannot reuse [_mapErrors] (void-typed) —
+    // the try/catch is inlined instead of adding a second, bool-returning
+    // error-mapping helper for a single call site.
+    try {
+      final bool? shown = await methodChannel.invokeMethod<bool>(
+        WireProtocol.mRequestEnableBluetooth,
+      );
+      return shown ?? false;
+    } on PlatformException catch (error) {
+      throw _toPrintlyException(error, _ErrorDomain.scan);
+    }
+  }
+
+  @override
   Future<void> startScan({required Set<ConnectionType> types}) {
     return _mapErrors(_ErrorDomain.scan, () async {
       await methodChannel

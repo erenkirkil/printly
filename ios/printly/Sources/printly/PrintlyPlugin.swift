@@ -11,6 +11,11 @@ import UIKit
 public class PrintlyPlugin: NSObject, FlutterPlugin {
 
     private let central = CentralController()
+
+    // Held briefly so ARC does not tear the manager down before the system
+    // power alert is presented; released after the alert had time to show.
+    private var powerAlertManager: CBCentralManager?
+
     private lazy var adapterStateHandler = AdapterStateStreamHandler(central: central)
     private lazy var scanResultsHandler = ScanResultsStreamHandler(central: central)
     private let connectionEventsHandler = ConnectionEventsStreamHandler()
@@ -70,6 +75,8 @@ public class PrintlyPlugin: NSObject, FlutterPlugin {
             result("iOS " + UIDevice.current.systemVersion)
         case WireCodes.Methods.openBluetoothSettings:
             result(Self.openBluetoothSettings())
+        case WireCodes.Methods.requestEnableBluetooth:
+            handleRequestEnableBluetooth(result: result)
         case WireCodes.Methods.startScan:
             handleStartScan(call: call, result: result)
         case WireCodes.Methods.stopScan:
@@ -173,6 +180,36 @@ public class PrintlyPlugin: NSObject, FlutterPlugin {
             }
             result(FlutterError(code: code, message: reason, details: nil))
         }
+    }
+
+    private func handleRequestEnableBluetooth(result: @escaping FlutterResult) {
+        // There is no programmatic "turn Bluetooth on" API on iOS.
+        // `CBCentralManager(delegate:queue:options:)` with the show-power-alert
+        // option is Apple's only sanctioned "turn it on" prompt — its Settings
+        // button legitimately deep-links to the system Bluetooth pane, which
+        // `openBluetoothSettings()` cannot do (see its own doc comment).
+        //
+        // `central.state` reads the shared, lazily-created `CentralController`'s
+        // manager *without* instantiating it (`manager?.state ?? .unknown` —
+        // see `CentralController.state`), so checking it here never disturbs
+        // that controller's lazy-init contract. If no manager has been created
+        // yet this reads as `.unknown`, and a power-alert manager is created
+        // regardless: when the radio actually is on, CoreBluetooth simply
+        // suppresses the alert, so this is harmless — it only ever shows the
+        // alert when it is actually warranted.
+        if central.state == .poweredOn {
+            result(false)
+            return
+        }
+        powerAlertManager = CBCentralManager(
+            delegate: nil,
+            queue: nil,
+            options: [CBCentralManagerOptionShowPowerAlertKey: true]
+        )
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            self?.powerAlertManager = nil
+        }
+        result(true)
     }
 
     private static func openBluetoothSettings() -> Bool {

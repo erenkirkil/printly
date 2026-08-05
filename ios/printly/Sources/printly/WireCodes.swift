@@ -59,6 +59,7 @@ extension WireCodes {
         static let getPlatformVersion = "getPlatformVersion"
         static let getAndroidSdkInt = "getAndroidSdkInt"
         static let openBluetoothSettings = "openBluetoothSettings"
+        static let requestEnableBluetooth = "requestEnableBluetooth"
         static let startScan = "startScan"
         static let stopScan = "stopScan"
         static let connect = "connect"

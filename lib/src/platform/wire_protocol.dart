@@ -31,6 +31,12 @@ abstract final class WireProtocol {
   /// Opens the system Bluetooth settings (Android) or app settings (iOS).
   static const String mOpenBluetoothSettings = 'openBluetoothSettings';
 
+  /// Requests that the radio be turned on in place: Android's
+  /// `ACTION_REQUEST_ENABLE` system dialog, or iOS's power-alert
+  /// `CBCentralManager`. Returns whether the request was shown — the actual
+  /// enable/decline outcome must be observed on [adapterStateChannel].
+  static const String mRequestEnableBluetooth = 'requestEnableBluetooth';
+
   /// Starts a device scan for the transports in [keyTypes].
   static const String mStartScan = 'startScan';
 

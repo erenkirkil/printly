@@ -42,6 +42,7 @@ internal object WireCodes {
         const val GET_PLATFORM_VERSION = "getPlatformVersion"
         const val GET_ANDROID_SDK_INT = "getAndroidSdkInt"
         const val OPEN_BLUETOOTH_SETTINGS = "openBluetoothSettings"
+        const val REQUEST_ENABLE_BLUETOOTH = "requestEnableBluetooth"
         const val START_SCAN = "startScan"
         const val STOP_SCAN = "stopScan"
         const val CONNECT = "connect"

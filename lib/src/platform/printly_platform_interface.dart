@@ -69,6 +69,19 @@ abstract class PrintlyPlatform extends PlatformInterface {
     );
   }
 
+  /// Asks the native side to request that the user turn Bluetooth on, in
+  /// place, without leaving the app.
+  ///
+  /// Returns whether the system request was actually **shown** — not
+  /// whether the radio ended up on. This call does not wait for the user's
+  /// decision; watch [adapterState] to observe the outcome. Returns `false`
+  /// as a no-op when the radio is already on.
+  Future<bool> requestEnableBluetooth() {
+    throw UnimplementedError(
+      'requestEnableBluetooth() has not been implemented.',
+    );
+  }
+
   /// Asks the native side to start discovering devices of the given [types].
   ///
   /// The returned future completes as soon as the native scan has been
