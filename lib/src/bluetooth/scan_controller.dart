@@ -253,6 +253,18 @@ class ScanController {
     required bool isIOS,
   }) => isIOS ? const <ConnectionType>{ConnectionType.ble} : kDefaultScanTypes;
 
+  /// Round-1 transport set for [ScanStrategy.classicFirst], factored out as
+  /// a pure, static function for the same testability reason as
+  /// [defaultScanTypesForPlatform]: no platform channel or device needed to
+  /// exercise the per-platform branch.
+  ///
+  /// iOS has no public Bluetooth Classic API, so classicFirst degrades to a
+  /// single `{ble}` round there (see [ScanStrategy.classicFirst]); every
+  /// other platform gets a real `{classic}` round 1.
+  static Set<ConnectionType> roundOneTypes({required bool isIOS}) => isIOS
+      ? const <ConnectionType>{ConnectionType.ble}
+      : const <ConnectionType>{ConnectionType.classic};
+
   Future<void> _runStart({
     required Duration timeout,
     required Set<ConnectionType> types,
@@ -276,9 +288,7 @@ class ScanController {
 
       final Set<ConnectionType> round1Types =
           strategy == ScanStrategy.classicFirst
-          ? (Platform.isIOS
-                ? const <ConnectionType>{ConnectionType.ble}
-                : const <ConnectionType>{ConnectionType.classic})
+          ? roundOneTypes(isIOS: Platform.isIOS)
           : types;
 
       await _platform.startScan(types: round1Types);
@@ -323,18 +333,46 @@ class ScanController {
   /// flip to `false` in between, so this reads as one continuous scan.
   ///
   /// If a manual [stopScan] completes while this transition is in flight
-  /// (native calls are async), [isScanning] observes `false` once we regain
-  /// control and the transition is abandoned instead of resurrecting a scan
-  /// the caller just asked to stop.
+  /// (native calls are async — the transition holds neither [_pendingStart]
+  /// nor [_pendingStop], so a public [stopScan] races it freely),
+  /// [isScanning] observes `false` once we regain control and the
+  /// transition is abandoned instead of resurrecting a scan the caller just
+  /// asked to stop. There are two places this can be observed, and both
+  /// matter:
+  /// - Between this round's own `stopScan()` and its `startScan()`: round 2
+  ///   must simply never start. The check below the first `await` covers
+  ///   this.
+  /// - Between this round's `startScan()` dispatch and the check right
+  ///   after it: the concurrent stop's native `stopScan()` call raced (and
+  ///   lost) against this round's `startScan()`, so a BLE scan is now
+  ///   running natively with nothing left to stop it — every future public
+  ///   [stopScan] short-circuits once it observes `isScanning` already
+  ///   `false`. Left alone this orphans the radio in a scan that runs
+  ///   forever, invisible to the caller. So this path explicitly issues its
+  ///   own best-effort `stopScan()` before bailing out.
   Future<void> _runFallbackRound() async {
     _fallbackRoundDone = true;
     try {
       await _platform.stopScan();
+      // Pre-start hole: a concurrent stop landed between the transition's
+      // own stopScan() (above) and startScan() (below) — round 2 must not
+      // start at all.
       if (_disposed || !isScanning) return;
       await _platform.startScan(
         types: const <ConnectionType>{ConnectionType.ble},
       );
-      if (_disposed || !isScanning) return;
+      // Post-start hole: a concurrent stop raced this startScan() and lost,
+      // so the native BLE scan we just started is orphaned unless we stop
+      // it ourselves here — see the doc comment above for why.
+      if (_disposed || !isScanning) {
+        try {
+          await _platform.stopScan();
+        } catch (_) {
+          // Best-effort: the goal is not leaking the radio, not surfacing a
+          // redundant stop failure on top of whatever already happened.
+        }
+        return;
+      }
       _timeoutTimer?.cancel();
       _timeoutTimer = Timer(_activeTimeout!, _onScanWindowElapsed);
     } catch (error) {
