@@ -35,13 +35,7 @@ class DeviceTile extends StatelessWidget {
             padding: const EdgeInsets.all(12),
             child: Row(
               children: <Widget>[
-                Icon(
-                  device.type == ConnectionType.ble
-                      ? Icons.bluetooth
-                      : device.type == ConnectionType.classic
-                      ? Icons.bluetooth_searching
-                      : Icons.lan,
-                ),
+                Icon(_iconFor(device.availableTransports)),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -56,7 +50,7 @@ class DeviceTile extends StatelessWidget {
                       const SizedBox(height: 2),
                       Text(
                         <String>[
-                          device.type.name,
+                          _labelFor(device.availableTransports),
                           if (device.rssi != null) '${device.rssi} dBm',
                           if (device.isBonded) 'bonded',
                           state.name,
@@ -102,5 +96,29 @@ class DeviceTile extends StatelessWidget {
         );
       },
     );
+  }
+
+  /// Picks a representative icon for [transports]. A dual-mode radio
+  /// (Classic + BLE) is shown with the BLE glyph — it is the transport
+  /// `connect()` will end up preferring once Task 3 lands explicit
+  /// selection.
+  static IconData _iconFor(Set<ConnectionType> transports) {
+    if (transports.contains(ConnectionType.ble)) return Icons.bluetooth;
+    if (transports.contains(ConnectionType.classic)) {
+      return Icons.bluetooth_searching;
+    }
+    return Icons.lan;
+  }
+
+  /// Human-readable transport label. A dual-mode printer gets a combined
+  /// label (`classic+ble`) instead of picking just one, since both were
+  /// actually observed.
+  static String _labelFor(Set<ConnectionType> transports) {
+    if (transports.length > 1) {
+      final List<String> sorted =
+          transports.map((ConnectionType t) => t.name).toList()..sort();
+      return sorted.join('+');
+    }
+    return transports.single.name;
   }
 }

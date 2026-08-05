@@ -32,8 +32,12 @@ class PrintlyConnectionEvent {
     final Object? device = map['device'];
     final Object? stateCode = map['state'];
     if (device is! Map || stateCode is! int) return null;
-    final PrintlyDevice? decoded = PrintlyDevice.fromJson(
-      device.cast<String, Object?>(),
+    // Native connection events describe one transport at a time, same as
+    // scan events — route through the same wire decoder so a dual-mode
+    // radio's connection event still resolves to a valid single-transport
+    // record (ConnectionController keys by address, so this is harmless).
+    final PrintlyDevice? decoded = PrintlyDevice.fromWireMap(
+      device.cast<Object?, Object?>(),
     );
     if (decoded == null) return null;
     return PrintlyConnectionEvent(

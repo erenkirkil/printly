@@ -75,6 +75,10 @@ abstract final class WireProtocol {
   /// Whether the device is bonded/paired (bool).
   static const String keyIsBonded = 'isBonded';
 
+  /// Whether the device was actually observed during this scan (bool);
+  /// absent means true. Classic bonded seeding sends false.
+  static const String keySeenInScan = 'seenInScan';
+
   /// Connection state wire code (int) in connection events.
   static const String keyState = 'state';
 
