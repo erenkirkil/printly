@@ -9,10 +9,10 @@ Thermal printer SDK for Flutter. Bluetooth Classic + BLE, ESC/POS receipts
 built-in permission flow — in one self-contained plugin with no opaque vendor
 SDKs.
 
-> **First release.** Verified end to end on real hardware, but on a single
-> printer so far — see [Tested hardware](#tested-hardware). Network
-> (Ethernet/WiFi) printing is planned for a later release and is deliberately
-> absent from the API until it works.
+> Verified end to end on real hardware, but on a single printer so far — see
+> [Tested hardware](#tested-hardware). Network (Ethernet/WiFi) printing is
+> planned for a later release and is deliberately absent from the API until
+> it works.
 
 ## Why another printer package?
 
@@ -26,17 +26,25 @@ same states, same codes on Android and iOS — as a feature.
 
 - Bluetooth **Classic (SPP)** and **BLE** scan/connect in a single plugin
   (network transport planned)
-- Enum-based `BluetoothAdapterState` stream (not a bool)
+- One `PrintlyDevice` per physical radio — `availableTransports` lists every
+  transport it was seen on, and `connect(transport:)` picks which one to use
+- Enum-based `BluetoothAdapterState` stream (not a bool), independent from
+  runtime permission state (`checkPermissions()`/`requestPermissions()`)
 - Per-device `ConnectionState` streams + `activeDeviceStream`
 - Typed error model: sealed `PrintlyException` hierarchy with a
   cross-platform `PrintlyErrorCode` vocabulary — no string parsing
-- Built-in permission flow (Android 12+ runtime permissions, iOS)
+- Built-in permission flow (Android 12+ runtime permissions, iOS) plus
+  `requestEnableBluetooth()` to prompt the user to turn the radio on
 - Fluent ESC/POS `PrintJob` builder: text, feed, cut, divider, 7 barcode
-  symbologies, QR with smart module sizing
+  symbologies, QR with smart module sizing, and an opt-in `unmappable`
+  policy for sanitizing payloads a QR/barcode symbology can't encode
 - Turkish character support (CP857 primary, Windows-1254/ISO-8859-9
-  fallbacks) with byte tables verified against the Unicode mappings
+  fallbacks) with byte tables verified against the Unicode mappings, plus a
+  standalone `TurkishCodePage.toLatin1()` sanitizer
 - **Raster pipeline** — render text, images or a Flutter widget to dots and
   print them, so Turkish works even on printers that ignore code pages
+- Screen-scoped `newScanSession()` handles and a `classicFirst` scan
+  strategy alongside the process-lifetime `devicesStream`
 - Last-device persistence and opt-in auto-reconnect
 
 ## Turkish on any printer
@@ -145,6 +153,87 @@ try {
 }
 ```
 
+### Sanitizing QR & barcode payloads
+
+`PrintJob.qr()` and `PrintJob.barcode()` reject input they can't encode —
+`qr()` requires Latin-1 (so `ş ı ğ İ` and typographic punctuation like `₺`
+or smart quotes throw by default), and `barcode()`'s CODE128/CODE39 have
+their own narrow charsets. That default (`PrintlyUnmappable.throwError`)
+is unchanged — silent data loss inside a scannable code stays strictly
+opt-in. Pass `unmappable: PrintlyUnmappable.transliterate` to convert
+readable equivalents (Turkish letters, smart quotes, dashes) via
+`TurkishCodePage.toLatin1()` first and substitute whatever's left, or
+`PrintlyUnmappable.replace` to substitute everything unrepresentable
+outright:
+
+```dart
+job.qr(
+  '₺150 — “Kahve” siparişi',
+  unmappable: PrintlyUnmappable.transliterate,
+);
+// -> '?150 - "Kahve" siparisi' — the em dash and curly quotes transliterate,
+// "ş" becomes "s", but "₺" has no readable Latin-1 equivalent and falls to
+// the replacement byte ('?' by default; pass `replacement:` to change it).
+```
+
+`TurkishCodePage.toLatin1()` is also public on its own, for sanitizing any
+string headed somewhere Latin-1-only (a field, a log, a receipt line) without
+going through a `PrintJob` call.
+
+## Scanning
+
+`startScan()` defaults to a 10 s timeout (`kDefaultScanTimeout`) and a
+platform-appropriate transport set — `{classic, ble}` on Android, `{ble}` on
+iOS (it has no public Classic API). Override either per call, or set
+`Printly.instance.defaultScanTimeout` once for every call that omits
+`timeout`:
+
+```dart
+await printly.startScan(); // 10 s, platform-default transports
+await printly.startScan(timeout: const Duration(seconds: 20));
+printly.defaultScanTimeout = const Duration(seconds: 20); // app-wide default
+```
+
+**The bonded-seed trap.** On Android, Classic discovery seeds `devicesStream`
+from the OS bond cache *before* any inquiry result arrives, so a printer you
+paired months ago (and that may not even be powered on) can appear
+immediately. `PrintlyDevice.seenInScan` is `false` for those seed-only
+entries — connecting to one can still end in a timeout. Pass
+`includeBonded: false` to exclude bonded seeds from `devicesStream` entirely
+until an inquiry actually confirms them, or check `seenInScan` yourself
+before offering a "connect" affordance on an unconfirmed entry.
+
+Pass `strategy: ScanStrategy.classicFirst` to scan Bluetooth Classic first on
+Android and fall back to a single BLE round only if nothing named answered,
+instead of requesting both transports at once — a Classic inquiry saturates
+the radio, so a parallel scan can miss BLE-only printers under contention.
+It degrades silently to a single BLE round on iOS.
+
+For screen-scoped scanning (e.g. a "pick a printer" dialog), use
+`newScanSession()` instead of the process-lifetime `devicesStream`/
+`isScanningStream` — a session's `devices`/`isScanning` streams are seeded
+empty/`false` and never replay a previous screen's stale state:
+
+```dart
+class _PrinterPickerState extends State<PrinterPicker> {
+  late final PrintlyScanSession _session = printly.newScanSession();
+
+  @override
+  void initState() {
+    super.initState();
+    _session.start();
+  }
+
+  @override
+  void dispose() {
+    _session.dispose(); // not just stop() — see the API doc
+    super.dispose();
+  }
+
+  // build(): StreamBuilder on _session.devices / _session.isScanning
+}
+```
+
 ## Platform setup
 
 ### Android
@@ -183,6 +272,36 @@ No manifest changes needed — the plugin declares the Bluetooth permissions
    Classic printers are Android-only (`PrintlyErrorCode.classicRequiresMfi`);
    use the BLE transport on iOS. Most cheap 58 mm printers are dual-mode —
    they appear as Classic on Android and expose a BLE mode that iOS can see.
+
+## Migrating from 0.1.x
+
+`0.2.0` merges each physical radio into a single `PrintlyDevice` and moves
+transport selection into `connect()`:
+
+- `device.type` is gone — a dual-mode printer used to show up twice (once as
+  Classic, once as BLE); it now shows up **once**, with
+  `device.availableTransports` listing every transport it was seen on.
+  Replace `device.type` reads with `device.availableTransports`, and pick a
+  specific one at connect time: `printly.connect(device, transport:
+  ConnectionType.ble)`. Leaving `transport` out uses the platform default —
+  Classic on Android for a dual-mode radio (the field-proven RFCOMM path),
+  BLE always on iOS.
+- Persisted last-connected devices from 0.1.x are migrated automatically —
+  `loadLastConnectedDevice()`/`reconnectLastDevice()` still work with no
+  action needed.
+- Any 0.1.x call site that built a `const PrintlyDevice(...)` no longer
+  compiles: `availableTransports` is validated with a runtime assert
+  (must be non-empty), which `const` evaluation can't satisfy. Drop the
+  `const`.
+- `adapterState` used to fold missing Android runtime permissions into
+  `BluetoothAdapterState.unauthorized` and then freeze there (Android never
+  re-broadcasts on a permission change). It now reports the radio's actual
+  state only. Gate permission-dependent UI on `checkPermissions()` instead
+  of watching `adapterState` for `unauthorized`.
+- `kDefaultScanTimeout` dropped from 30 s to 10 s, and the implicit
+  `startScan()` transport set is now platform-aware (`{ble}` on iOS) instead
+  of always `{classic, ble}`. Pass an explicit `timeout`/`types`, or set
+  `Printly.instance.defaultScanTimeout`, to keep the old behaviour.
 
 ## Ecosystem readiness
 
