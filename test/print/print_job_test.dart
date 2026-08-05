@@ -377,7 +377,7 @@ void main() {
 
     test('transliterate converts and prints instead of throwing', () {
       final List<int> bytes = qrBytes(
-        'Bozuk "şalter"',
+        'Bozuk “şalter”',
         unmappable: PrintlyUnmappable.transliterate,
       );
       expect(_contains(bytes, latin1.encode('Bozuk "salter"')), isTrue);
