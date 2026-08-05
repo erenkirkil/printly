@@ -9,6 +9,7 @@ import 'bluetooth/bluetooth_manager.dart';
 import 'bluetooth/connection_controller.dart';
 import 'bluetooth/last_device_store.dart';
 import 'bluetooth/scan_controller.dart';
+import 'core/bluetooth_permission_set.dart';
 import 'core/connection_state.dart';
 import 'core/connection_type.dart';
 import 'core/printly_device.dart';
@@ -131,37 +132,12 @@ class Printly {
   /// first event arrives.
   bool get isBluetoothAvailable => _bluetooth.isBluetoothAvailable;
 
-  /// The permission set printly evaluates on the given platform/API level.
-  ///
-  /// Extracted so [checkPermissions] and [requestPermissions] can never
-  /// drift apart — consumers previously had to duplicate this mapping (and
-  /// silently break when it changed here). Visible for tests only; the
-  /// `permission_handler` type stays out of the public API.
-  @visibleForTesting
-  static List<ph.Permission> requiredPermissionSet({
-    required bool isAndroid,
-    required int sdkInt,
-  }) {
-    if (isAndroid) {
-      return sdkInt >= 31
-          ? <ph.Permission>[
-              ph.Permission.bluetoothScan,
-              ph.Permission.bluetoothConnect,
-            ]
-          : <ph.Permission>[
-              ph.Permission.bluetooth,
-              ph.Permission.locationWhenInUse,
-            ];
-    }
-    return <ph.Permission>[ph.Permission.bluetooth];
-  }
-
   Future<List<ph.Permission>> _requiredPermissions() async {
     if (!Platform.isAndroid) {
-      return requiredPermissionSet(isAndroid: false, sdkInt: 0);
+      return requiredBluetoothPermissions(isAndroid: false, sdkInt: 0);
     }
     final int sdkInt = await PrintlyPlatform.instance.getAndroidSdkInt();
-    return requiredPermissionSet(isAndroid: true, sdkInt: sdkInt);
+    return requiredBluetoothPermissions(isAndroid: true, sdkInt: sdkInt);
   }
 
   /// Returns the current permission status **without prompting the user**.

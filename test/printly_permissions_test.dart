@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
 import 'package:printly/printly.dart';
+import 'package:printly/src/core/bluetooth_permission_set.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -35,10 +36,10 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
-  group('requiredPermissionSet', () {
+  group('requiredBluetoothPermissions', () {
     test('Android 12+ asks only the two runtime Bluetooth permissions', () {
       expect(
-        Printly.requiredPermissionSet(isAndroid: true, sdkInt: 31),
+        requiredBluetoothPermissions(isAndroid: true, sdkInt: 31),
         <ph.Permission>[
           ph.Permission.bluetoothScan,
           ph.Permission.bluetoothConnect,
@@ -48,7 +49,7 @@ void main() {
 
     test('Android 11 and below adds location', () {
       expect(
-        Printly.requiredPermissionSet(isAndroid: true, sdkInt: 30),
+        requiredBluetoothPermissions(isAndroid: true, sdkInt: 30),
         <ph.Permission>[
           ph.Permission.bluetooth,
           ph.Permission.locationWhenInUse,
@@ -58,7 +59,7 @@ void main() {
 
     test('iOS asks only bluetooth', () {
       expect(
-        Printly.requiredPermissionSet(isAndroid: false, sdkInt: 0),
+        requiredBluetoothPermissions(isAndroid: false, sdkInt: 0),
         <ph.Permission>[ph.Permission.bluetooth],
       );
     });
