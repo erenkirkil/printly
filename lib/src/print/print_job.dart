@@ -19,6 +19,7 @@ import 'printly_qr_error_level.dart';
 import 'printly_text_align.dart';
 import 'printly_text_size.dart';
 import 'printly_text_style.dart';
+import 'printly_unmappable.dart';
 import 'qr_sizing.dart';
 import 'turkish_code_page.dart';
 
@@ -234,23 +235,44 @@ class PrintJob {
   /// [maxModuleSize] to cap the physical size.
   ///
   /// [data] must be representable in Latin-1 (the encoding the printer stores
-  /// QR symbols in). Non-Latin-1 input — including the Turkish letters
-  /// `ş ı ğ İ` and any non-Latin script — throws [ArgumentError]. Encode such
-  /// payloads yourself and use [raw] if a printer-specific QR mode is required.
-  /// Payloads longer than 2953 bytes (the QR byte-mode maximum) also throw.
+  /// QR symbols in). What happens to runes outside Latin-1 — including the
+  /// Turkish letters `ş ı ğ İ` — is chosen by [unmappable]: the default
+  /// [PrintlyUnmappable.throwError] throws [ArgumentError] so silent data
+  /// loss in a scannable code stays opt-in;
+  /// [PrintlyUnmappable.transliterate] converts readable equivalents via
+  /// [TurkishCodePage.toLatin1] and substitutes the rest with [replacement];
+  /// [PrintlyUnmappable.replace] substitutes everything above `0xFF`.
+  /// Payloads longer than 2953 bytes (the QR byte-mode maximum, measured
+  /// after sanitization — `…` expands to `...`) always throw.
   PrintJob qr(
     String data, {
     int? maxModuleSize,
     PrintlyQrErrorLevel errorLevel = PrintlyQrErrorLevel.medium,
     PrintlyTextAlign align = PrintlyTextAlign.center,
+    PrintlyUnmappable unmappable = PrintlyUnmappable.throwError,
+    int replacement = TurkishCodePage.unmappable,
   }) {
-    if (data.runes.any((int rune) => rune > 0xFF)) {
+    final String sanitized = switch (unmappable) {
+      PrintlyUnmappable.throwError => data,
+      PrintlyUnmappable.replace => TurkishCodePage.toLatin1(
+        data,
+        transliterate: false,
+        replacement: replacement,
+      ),
+      PrintlyUnmappable.transliterate => TurkishCodePage.toLatin1(
+        data,
+        replacement: replacement,
+      ),
+    };
+    if (sanitized.runes.any((int rune) => rune > 0xFF)) {
       throw ArgumentError(
         'Invalid QR payload: contains characters outside Latin-1 (e.g. the '
-        'Turkish letters ş/ı/ğ/İ). QR data must be Latin-1. Got: "$data"',
+        'Turkish letters ş/ı/ğ/İ). QR data must be Latin-1; pass '
+        'unmappable: PrintlyUnmappable.transliterate to sanitize instead. '
+        'Got: "$data"',
       );
     }
-    final Uint8List payload = Uint8List.fromList(latin1.encode(data));
+    final Uint8List payload = Uint8List.fromList(latin1.encode(sanitized));
     if (payload.length > _maxQrBytes) {
       throw ArgumentError(
         'QR payload is ${payload.length} bytes; the QR byte-mode maximum is '
@@ -258,7 +280,7 @@ class PrintJob {
       );
     }
     final int moduleSize = QrSizing.moduleSize(
-      data: data,
+      data: sanitized,
       errorLevel: errorLevel,
       paperDots: _config.paperWidth.dots,
       maxModuleSize: maxModuleSize,

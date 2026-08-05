@@ -1,3 +1,4 @@
+import 'dart:convert' show latin1;
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:printly/printly.dart';
@@ -359,6 +360,59 @@ void main() {
         ..text('A')
         ..feed(1);
       expect(j.build(), j.build());
+    });
+  });
+
+  group('PrintJob.qr sanitization', () {
+    // GS ( k <len> 0x31 0x50 0x30 <payload> — locate fn-180 payload start.
+    List<int> qrBytes(String data, {PrintlyUnmappable? unmappable}) =>
+        unmappable == null
+        ? job().qr(data).build()
+        : job().qr(data, unmappable: unmappable).build();
+
+    test('default still throws on non-Latin-1 (behaviour preserved)', () {
+      expect(() => job().qr('Ücret ₺250'), throwsArgumentError);
+      expect(() => job().qr('Kapı — arıza'), throwsArgumentError);
+    });
+
+    test('transliterate converts and prints instead of throwing', () {
+      final List<int> bytes = qrBytes(
+        'Bozuk "şalter"',
+        unmappable: PrintlyUnmappable.transliterate,
+      );
+      expect(_contains(bytes, latin1.encode('Bozuk "salter"')), isTrue);
+    });
+
+    test('replace substitutes without transliterating', () {
+      final List<int> bytes = qrBytes(
+        'ş—',
+        unmappable: PrintlyUnmappable.replace,
+      );
+      expect(_contains(bytes, latin1.encode('??')), isTrue);
+    });
+
+    test('Latin-1 payloads are byte-identical across policies', () {
+      expect(
+        qrBytes('Sıcaklık 45°C'.replaceAll('ı', 'i')),
+        qrBytes(
+          'Sıcaklık 45°C'.replaceAll('ı', 'i'),
+          unmappable: PrintlyUnmappable.transliterate,
+        ),
+      );
+    });
+
+    test('byte cap is checked after ellipsis expansion', () {
+      // 2952 chars + '…' → 2955 bytes after '…' becomes '...': must throw.
+      final String data = 'a' * 2952;
+      expect(
+        () => job().qr('$data…', unmappable: PrintlyUnmappable.transliterate),
+        throwsArgumentError,
+      );
+      // Same length without expansion stays within the 2953-byte cap.
+      expect(
+        () => job().qr('${data}b', unmappable: PrintlyUnmappable.transliterate),
+        returnsNormally,
+      );
     });
   });
 }

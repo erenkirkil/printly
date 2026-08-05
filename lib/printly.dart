@@ -28,6 +28,7 @@ export 'src/print/printly_qr_error_level.dart';
 export 'src/print/printly_text_align.dart';
 export 'src/print/printly_text_size.dart';
 export 'src/print/printly_text_style.dart';
+export 'src/print/printly_unmappable.dart';
 export 'src/print/qr_sizing.dart';
 export 'src/print/turkish_code_page.dart';
 export 'src/printly_base.dart';

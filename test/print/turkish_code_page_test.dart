@@ -326,4 +326,85 @@ void main() {
       expectAllBytesRoundTrip(iso8859_9Expected, PrintlyCharset.iso8859_9);
     });
   });
+
+  group('TurkishCodePage.toLatin1', () {
+    test('passes Latin-1 Turkish letters through untouched', () {
+      // The easiest regression to write is transliterating these too —
+      // ç ö ü Ç Ö Ü are inside Latin-1 and must survive verbatim.
+      expect(TurkishCodePage.toLatin1('çöüÇÖÜ'), 'çöüÇÖÜ');
+    });
+
+    test('transliterates the six non-Latin-1 Turkish letters', () {
+      expect(TurkishCodePage.toLatin1('şŞıİğĞ'), 'sSiIgG');
+    });
+
+    test('transliterates typographic punctuation', () {
+      expect(TurkishCodePage.toLatin1('a—b–c'), 'a-b-c');
+      // Test smart quotes: U+201C U+201D U+201E U+2018 U+2019
+      expect(
+        TurkishCodePage.toLatin1(
+          String.fromCharCodes([
+            0x201C,
+            120,
+            0x201D,
+            32,
+            0x201E,
+            121,
+            0x2018,
+            122,
+            0x2019,
+          ]),
+        ),
+        String.fromCharCodes([34, 120, 34, 32, 34, 121, 39, 122, 39]),
+      );
+      expect(TurkishCodePage.toLatin1('Devam…'), 'Devam...');
+    });
+
+    test('replaces unmapped runes above 0xFF with the replacement', () {
+      expect(TurkishCodePage.toLatin1('₺'), '?');
+      expect(TurkishCodePage.toLatin1('😀'), '?');
+      expect(TurkishCodePage.toLatin1('漢'), '?');
+      expect(TurkishCodePage.toLatin1('₺', replacement: 0x2A), '*');
+    });
+
+    test('transliterate: false replaces instead of transliterating', () {
+      expect(TurkishCodePage.toLatin1('ş—', transliterate: false), '??');
+    });
+
+    test('empty and ASCII-only input come back identical', () {
+      expect(TurkishCodePage.toLatin1(''), '');
+      expect(TurkishCodePage.toLatin1('Fis No: 42'), 'Fis No: 42');
+    });
+
+    test('rejects a replacement outside Latin-1', () {
+      expect(
+        () => TurkishCodePage.toLatin1('x', replacement: 0x100),
+        throwsArgumentError,
+      );
+      expect(
+        () => TurkishCodePage.toLatin1('x', replacement: -1),
+        throwsArgumentError,
+      );
+    });
+
+    test('property: output always survives latin1.encode', () {
+      // The actual contract: whatever goes in, the result is encodable.
+      const List<String> samples = <String>[
+        'Ücret ₺250',
+        'Kapı — arıza',
+        'Bozuk "şalter"',
+        'Devam…',
+        'Sıcaklık 45°C',
+        'İĞŞığş😀漢🎉 ￿',
+        'plain ascii',
+      ];
+      for (final String s in samples) {
+        expect(
+          () => latin1.encode(TurkishCodePage.toLatin1(s)),
+          returnsNormally,
+          reason: 'failed for: $s',
+        );
+      }
+    });
+  });
 }
