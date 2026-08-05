@@ -132,14 +132,15 @@ class MethodChannelPrintly extends PrintlyPlatform {
   }
 
   @override
-  Future<void> connect({required PrintlyDevice device, Duration? timeout}) {
+  Future<void> connect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+    Duration? timeout,
+  }) {
     return _mapErrors(_ErrorDomain.connection, () async {
       await methodChannel
           .invokeMethod<void>(WireProtocol.mConnect, <String, Object?>{
-            WireProtocol.keyDevice: _deviceWireMap(
-              device,
-              device.availableTransports.first,
-            ),
+            WireProtocol.keyDevice: _deviceWireMap(device, transport),
             if (timeout != null)
               WireProtocol.keyTimeoutMs: timeout.inMilliseconds,
           });
@@ -147,30 +148,30 @@ class MethodChannelPrintly extends PrintlyPlatform {
   }
 
   @override
-  Future<void> disconnect({required PrintlyDevice device}) {
+  Future<void> disconnect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+  }) {
     return _mapErrors(_ErrorDomain.connection, () async {
-      await methodChannel
-          .invokeMethod<void>(WireProtocol.mDisconnect, <String, Object?>{
-            WireProtocol.keyDevice: _deviceWireMap(
-              device,
-              device.availableTransports.first,
-            ),
-          });
+      await methodChannel.invokeMethod<void>(
+        WireProtocol.mDisconnect,
+        <String, Object?>{
+          WireProtocol.keyDevice: _deviceWireMap(device, transport),
+        },
+      );
     });
   }
 
   @override
   Future<void> write({
     required PrintlyDevice device,
+    required ConnectionType transport,
     required Uint8List bytes,
   }) {
     return _mapErrors(_ErrorDomain.write, () async {
       await methodChannel
           .invokeMethod<void>(WireProtocol.mWrite, <String, Object?>{
-            WireProtocol.keyDevice: _deviceWireMap(
-              device,
-              device.availableTransports.first,
-            ),
+            WireProtocol.keyDevice: _deviceWireMap(device, transport),
             WireProtocol.keyBytes: bytes,
           });
     });
@@ -178,14 +179,14 @@ class MethodChannelPrintly extends PrintlyPlatform {
 
   /// Builds the native `keyDevice` payload for [device] over the given
   /// [transport]. The native side requires a single concrete transport per
-  /// call (`keyType`), but [PrintlyDevice.availableTransports] may now list
-  /// more than one for a dual-mode radio, so a transport must be resolved
-  /// before this map can be built.
-  ///
-  /// Interim: Task 3 (transport selection) replaces the call sites' use of
-  /// `.first` with the explicitly resolved transport; this helper already
-  /// takes [transport] as an argument so that change is a one-line edit at
-  /// each call site above, not a signature change here.
+  /// call (`keyType`) and keys its session by `type:address`, but
+  /// [PrintlyDevice.availableTransports] may list more than one for a
+  /// dual-mode radio — so [transport] must be the *same* value across the
+  /// [connect]/[disconnect]/[write] calls for one session. Passing a
+  /// different transport than the one used to open the session does not
+  /// error; it silently misses the session on the native side. The caller
+  /// (`ConnectionController`) is responsible for resolving and remembering
+  /// that one value; this helper only assembles the wire map.
   static Map<String, Object?> _deviceWireMap(
     PrintlyDevice device,
     ConnectionType transport,

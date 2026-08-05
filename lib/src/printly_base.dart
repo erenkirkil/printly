@@ -255,6 +255,20 @@ class Printly {
   /// Opens a link to [device]. Idempotent for duplicate taps and serialises
   /// switching between two devices (disconnect current, then connect new).
   ///
+  /// [transport] picks the [ConnectionType] to use when [device] advertises
+  /// more than one (a dual-mode Classic + BLE radio). When omitted, the
+  /// default preference is platform-specific: on Android, Classic is chosen
+  /// when available — it is the field-proven, most reliable RFCOMM path for
+  /// dual-mode printers; on iOS, only BLE is ever chosen (Classic requires
+  /// MFi certification, which is out of scope). Pass
+  /// `transport: ConnectionType.ble` explicitly on Android to opt into BLE
+  /// for a dual-mode printer instead. See
+  /// `ConnectionController.resolveTransport` for the full rule, and
+  /// [transportOf] to read back what was actually chosen. Switching the
+  /// transport of an already-connected device requires passing an explicit,
+  /// different [transport] — connecting again with the same or no transport
+  /// while already connected is a no-op.
+  ///
   /// Completes with a [PrintlyConnectionException] when the attempt fails
   /// (its [PrintlyException.code] distinguishes timeouts, refusals, and
   /// dropped links) and with a [PrintlyUnsupportedException] for
@@ -270,6 +284,7 @@ class Printly {
   /// [stopScan] before this in the ordinary single-printer case.
   Future<void> connect(
     PrintlyDevice device, {
+    ConnectionType? transport,
     Duration timeout = kDefaultConnectTimeout,
   }) async {
     if (device.availableTransports.contains(ConnectionType.network)) {
@@ -280,7 +295,7 @@ class Printly {
         'Network (Ethernet/WiFi) printing is not implemented yet.',
       );
     }
-    return _connection.connect(device, timeout: timeout);
+    return _connection.connect(device, transport: transport, timeout: timeout);
   }
 
   /// Closes the current link. When [device] is omitted, disconnects the
@@ -308,6 +323,13 @@ class Printly {
   String? lastFailureReasonOf(PrintlyDevice device) =>
       _connection.lastFailureReasonOf(device);
 
+  /// The [ConnectionType] [connect] chose (or was told to use) for [device]:
+  /// the active link's transport, or the last one used if [device] is
+  /// currently disconnected. `null` if [device] has never been connected
+  /// this session.
+  ConnectionType? transportOf(PrintlyDevice device) =>
+      _connection.transportOf(device);
+
   /// Creates a new [PrintJob] for the given paper width.
   ///
   /// Loads (and caches) the ESC/POS capability profile, so the first call may
@@ -330,7 +352,26 @@ class Printly {
   /// or [PrintlyErrorCode.writeFailed]. On iOS printing ships in a later
   /// release and currently rejects with a [PrintlyUnsupportedException].
   Future<void> print(PrintlyDevice device, PrintJob job) {
-    return PrintlyPlatform.instance.write(device: device, bytes: job.build());
+    // The write must travel over the same transport the active (or last)
+    // connect() used — the native side keys the session by `type:address`.
+    // transportOf() is null only when this device was never connected
+    // through this controller; resolveTransport() re-derives the same
+    // choice connect() would have made so a write attempt still gets a
+    // sensible transport (and the native "not connected" error) instead of
+    // an unrelated crash.
+    final ConnectionType transport;
+    try {
+      transport =
+          _connection.transportOf(device) ??
+          ConnectionController.resolveTransport(device, isIOS: Platform.isIOS);
+    } catch (error, stackTrace) {
+      return Future<void>.error(error, stackTrace);
+    }
+    return PrintlyPlatform.instance.write(
+      device: device,
+      transport: transport,
+      bytes: job.build(),
+    );
   }
 
   /// Loads the last persisted device and auto-reconnect flag, caches them

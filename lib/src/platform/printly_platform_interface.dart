@@ -97,33 +97,54 @@ abstract class PrintlyPlatform extends PlatformInterface {
     throw UnimplementedError('scanResults has not been implemented.');
   }
 
-  /// Asks the native side to open a link to [device]. The future completes
-  /// once the native stack reports the link as open, or rejects with a
-  /// [PlatformException] if the attempt fails (permission denied, timeout,
-  /// remote refusal, etc.).
+  /// Asks the native side to open a link to [device] over [transport]. The
+  /// future completes once the native stack reports the link as open, or
+  /// rejects with a [PlatformException] if the attempt fails (permission
+  /// denied, timeout, remote refusal, etc.).
+  ///
+  /// [transport] must be one of [PrintlyDevice.availableTransports] — the
+  /// caller (`ConnectionController`) resolves which one before dispatching
+  /// here. The **same** [transport] value must also be passed to the
+  /// matching [disconnect] and [write] calls for this device: the native
+  /// side keys a session by `type:address`, so a mismatched transport across
+  /// the three calls silently misses the session instead of erroring.
   ///
   /// Per-device state transitions that happen after the future resolves —
   /// e.g. a remote disconnect, an auto-reconnect retry — arrive through
   /// [connectionEvents].
-  Future<void> connect({required PrintlyDevice device, Duration? timeout}) {
+  Future<void> connect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+    Duration? timeout,
+  }) {
     throw UnimplementedError('connect() has not been implemented.');
   }
 
-  /// Asks the native side to close the link to [device]. Safe to call when
-  /// no link is open for [device]; native implementations must treat this as
-  /// a no-op in that case.
-  Future<void> disconnect({required PrintlyDevice device}) {
+  /// Asks the native side to close the link to [device] over [transport].
+  /// Safe to call when no link is open for [device]; native implementations
+  /// must treat this as a no-op in that case.
+  ///
+  /// [transport] must match the value passed to the [connect] call that
+  /// opened this session — see the note on [connect].
+  Future<void> disconnect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+  }) {
     throw UnimplementedError('disconnect() has not been implemented.');
   }
 
-  /// Writes [bytes] to the open link to [device].
+  /// Writes [bytes] to the open link to [device] over [transport].
   ///
   /// The future completes once the native stack has handed the payload to the
   /// transport (RFCOMM `OutputStream` flush, or the final GATT characteristic
   /// write acknowledgement), or rejects with a [PlatformException] when no link
   /// is open, the link is not yet ready for writes, or the transport fails.
+  ///
+  /// [transport] must match the value passed to the [connect] call that
+  /// opened this session — see the note on [connect].
   Future<void> write({
     required PrintlyDevice device,
+    required ConnectionType transport,
     required Uint8List bytes,
   }) {
     throw UnimplementedError('write() has not been implemented.');
