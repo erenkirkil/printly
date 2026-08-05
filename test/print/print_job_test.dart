@@ -415,4 +415,65 @@ void main() {
       );
     });
   });
+
+  group('PrintJob.barcode sanitization', () {
+    test('default still throws on out-of-charset input', () {
+      expect(() => job().barcode('Kapı—1'), throwsArgumentError);
+      expect(
+        () => job().barcode('abc', type: PrintlyBarcodeType.code39),
+        throwsArgumentError,
+      );
+    });
+
+    test('code128 transliterate converts Turkish letters and dashes', () {
+      final List<int> bytes = job()
+          .barcode('Kapı—1', unmappable: PrintlyUnmappable.transliterate)
+          .build();
+      // CODE128 payload goes on the wire {B-prefixed and length-prefixed.
+      expect(_contains(bytes, latin1.encode('{BKapi-1')), isTrue);
+    });
+
+    test('code128 replaces in-Latin-1 but out-of-ASCII chars too', () {
+      // ° (0xB0) survives toLatin1 but CODE128-B is ASCII-only.
+      final List<int> bytes = job()
+          .barcode('45°C', unmappable: PrintlyUnmappable.transliterate)
+          .build();
+      expect(_contains(bytes, latin1.encode('{B45?C')), isTrue);
+    });
+
+    test('code39 folds lowercase and uses dash as default replacement', () {
+      final List<int> bytes = job()
+          .barcode(
+            'kapı no.7',
+            type: PrintlyBarcodeType.code39,
+            unmappable: PrintlyUnmappable.transliterate,
+          )
+          .build();
+      // ı→i→I, lowercase folded, space and . kept: "KAPI NO.7".
+      expect(_contains(bytes, latin1.encode('KAPI NO.7')), isTrue);
+    });
+
+    test('rejects a replacement invalid for the symbology', () {
+      expect(
+        () => job().barcode(
+          'ş1',
+          type: PrintlyBarcodeType.code39,
+          unmappable: PrintlyUnmappable.replace,
+          replacement: 0x3F, // '?' is not in the CODE39 charset
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('numeric symbologies never sanitize — invalid input still throws', () {
+      expect(
+        () => job().barcode(
+          '4006381333931x',
+          type: PrintlyBarcodeType.ean13,
+          unmappable: PrintlyUnmappable.transliterate,
+        ),
+        throwsArgumentError,
+      );
+    });
+  });
 }

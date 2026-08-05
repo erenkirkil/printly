@@ -111,6 +111,21 @@ class PrintJob {
   // larger cannot be encoded by any printer.
   static const int _maxQrBytes = 2953;
 
+  // Sanitization targets per symbology. CODE128 subset B covers printable
+  // ASCII (0x20-0x7E; 0x7F DEL is in the code set but not printable — a
+  // replacement no scanner app can display is useless, so it is excluded).
+  // CODE39 has its own narrow set. Numeric symbologies (EAN/UPC/ITF) and
+  // CODABAR are deliberately absent: substituting characters in a
+  // check-digit payload would print a scannable-but-wrong code.
+  static final Set<int> _code128Charset = <int>{
+    for (int c = 0x20; c <= 0x7E; c++) c,
+  };
+  static final Set<int> _code39Charset = <int>{
+    for (int c = 0x30; c <= 0x39; c++) c, // 0-9
+    for (int c = 0x41; c <= 0x5A; c++) c, // A-Z
+    0x2D, 0x2E, 0x24, 0x2F, 0x2B, 0x25, 0x20, // - . $ / + % space
+  };
+
   final Generator _generator;
   final PrintConfig _config;
   final List<int> _bytes = <int>[];
@@ -199,7 +214,17 @@ class PrintJob {
   /// [textPosition]. CODE128 payloads are automatically prefixed with the
   /// `{B` code set and literal `{` characters are escaped; a caller-supplied
   /// `{A`/`{B`/`{C` selector is kept as-is (with the remainder escaped).
-  /// Throws [ArgumentError] when [data] is not valid for [type].
+  ///
+  /// [unmappable] chooses what happens to characters the symbology cannot
+  /// encode. It only applies to [PrintlyBarcodeType.code128] (target:
+  /// printable ASCII) and [PrintlyBarcodeType.code39] (its narrow charset;
+  /// lowercase is folded to uppercase first). Numeric symbologies and
+  /// CODABAR always validate strictly — substituting characters in a
+  /// check-digit payload would print a scannable-but-wrong code.
+  /// [replacement] defaults per symbology (`?` for CODE128, `-` for CODE39)
+  /// and must itself be encodable, otherwise [ArgumentError].
+  /// Throws [ArgumentError] when the (sanitized) [data] is not valid for
+  /// [type].
   PrintJob barcode(
     String data, {
     PrintlyBarcodeType type = PrintlyBarcodeType.code128,
@@ -208,8 +233,16 @@ class PrintJob {
     bool showText = true,
     PrintlyHriPosition textPosition = PrintlyHriPosition.below,
     PrintlyTextAlign align = PrintlyTextAlign.center,
+    PrintlyUnmappable unmappable = PrintlyUnmappable.throwError,
+    int? replacement,
   }) {
-    final Barcode bc = _buildBarcode(type, data);
+    final String sanitized = _sanitizeBarcode(
+      data,
+      type,
+      unmappable,
+      replacement,
+    );
+    final Barcode bc = _buildBarcode(type, sanitized);
     final BarcodeText hri = showText
         ? _toBarcodeText(textPosition)
         : BarcodeText.none;
@@ -488,6 +521,92 @@ class PrintJob {
       };
     } on Exception catch (error) {
       throw ArgumentError('Invalid ${type.name} barcode payload: $error');
+    }
+  }
+
+  /// Applies the [PrintlyUnmappable] policy for the symbologies where a
+  /// substitution cannot corrupt the payload semantics (CODE128, CODE39).
+  static String _sanitizeBarcode(
+    String data,
+    PrintlyBarcodeType type,
+    PrintlyUnmappable unmappable,
+    int? replacement,
+  ) {
+    final Set<int>? allowed = switch (type) {
+      PrintlyBarcodeType.code128 => _code128Charset,
+      PrintlyBarcodeType.code39 => _code39Charset,
+      _ => null,
+    };
+
+    // For throwError policy, validate that all characters are valid.
+    if (unmappable == PrintlyUnmappable.throwError) {
+      if (allowed != null) {
+        _validateBarcodeData(data, type, allowed);
+      }
+      return data;
+    }
+
+    if (allowed == null) return data;
+    final int fallback =
+        replacement ??
+        (type == PrintlyBarcodeType.code39 ? 0x2D : TurkishCodePage.unmappable);
+    if (!allowed.contains(fallback)) {
+      throw ArgumentError.value(
+        fallback,
+        'replacement',
+        'not encodable in ${type.name}',
+      );
+    }
+    String result = TurkishCodePage.toLatin1(
+      data,
+      transliterate: unmappable == PrintlyUnmappable.transliterate,
+      replacement: fallback,
+    );
+    if (type == PrintlyBarcodeType.code39) {
+      result = result.toUpperCase();
+    }
+    final StringBuffer out = StringBuffer();
+    for (final int rune in result.runes) {
+      out.writeCharCode(allowed.contains(rune) ? rune : fallback);
+    }
+    return out.toString();
+  }
+
+  /// Validates that [data] contains only characters valid for [type].
+  static void _validateBarcodeData(
+    String data,
+    PrintlyBarcodeType type,
+    Set<int> allowed,
+  ) {
+    // For CODE128, skip validation of code set selector prefix.
+    int startIdx = 0;
+    if (type == PrintlyBarcodeType.code128 &&
+        data.length >= 2 &&
+        data[0] == '{' &&
+        (data[1] == 'A' || data[1] == 'B' || data[1] == 'C')) {
+      startIdx = 2;
+    }
+
+    // Check each character (braces are allowed in CODE128, will be escaped later).
+    for (int i = startIdx; i < data.length; i++) {
+      final int rune = data.codeUnitAt(i);
+      if (type == PrintlyBarcodeType.code128) {
+        if (!allowed.contains(rune) && rune != 0x7B) {
+          // 0x7B is '{', allowed in CODE128 (will be escaped).
+          throw ArgumentError(
+            'Invalid ${type.name} barcode payload: contains character '
+            '"${String.fromCharCode(rune)}" (U+${rune.toRadixString(16).padLeft(4, '0')}) '
+            'which is outside printable ASCII. Got: "$data"',
+          );
+        }
+      } else {
+        if (!allowed.contains(rune)) {
+          throw ArgumentError(
+            'Invalid ${type.name} barcode payload: contains character '
+            '"${String.fromCharCode(rune)}" which is not in the valid charset. Got: "$data"',
+          );
+        }
+      }
     }
   }
 
