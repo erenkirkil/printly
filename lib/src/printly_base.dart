@@ -116,6 +116,10 @@ class Printly {
   /// iOS this also triggers the system Bluetooth permission prompt if the
   /// app has not yet been authorised and
   /// `NSBluetoothAlwaysUsageDescription` is present in the Info.plist.
+  ///
+  /// On Android this stream reports the radio alone. Missing runtime
+  /// permissions are **not** folded in (they were before 0.2.0, and froze
+  /// the stream at `unauthorized`) — check them with [checkPermissions].
   Stream<BluetoothAdapterState> get adapterState => _bluetooth.stream;
 
   /// Most recently observed [BluetoothAdapterState].
