@@ -443,7 +443,14 @@ class Printly {
     final PrintlyDevice? device = _cachedLastDevice;
     if (device == null) return;
     if (_connection.stateOf(device) == ConnectionState.connected) return;
-    unawaited(_connection.connect(device).catchError((_) {}));
+    // Reconnect passes the remembered transport so an explicit BLE choice on a
+    // dual-mode radio survives an adapter power-cycle instead of silently
+    // reverting to the platform default.
+    unawaited(
+      _connection
+          .connect(device, transport: _connection.transportOf(device))
+          .catchError((_) {}),
+    );
   }
 
   /// Maps `permission_handler`'s status into printly's own enum so the
