@@ -63,6 +63,33 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
       const Stream<PrintlyConnectionEvent>.empty();
 }
 
+/// Extends [_FakePlatform] to let a specific numbered `startScan` call be
+/// held open on a [Completer] — used to deterministically land a manual
+/// [ScanController.stopScan] call in the middle of the round-1→round-2
+/// transition's `await _platform.startScan(...)`, reproducing the orphaned
+/// native scan regression. [_FakePlatform.startCompleter] gates every call
+/// uniformly and cannot isolate a single round, hence this local subclass
+/// instead of touching the shared fake.
+class _GatedStartPlatform extends _FakePlatform {
+  /// 1-indexed call number to gate (e.g. 2 = round 2's startScan).
+  int gateAtCallNumber = 0;
+  Completer<void>? gateOnCall;
+
+  @override
+  Future<void> startScan({required Set<ConnectionType> types}) async {
+    startScanCalls++;
+    lastTypes = types;
+    typesCalls.add(types);
+    if (startScanCalls == gateAtCallNumber && gateOnCall != null) {
+      await gateOnCall!.future;
+    }
+    if (startErrorOnCall != null && startScanCalls == 2) {
+      throw startErrorOnCall!;
+    }
+    if (startError != null) throw startError!;
+  }
+}
+
 void main() {
   late _FakePlatform platform;
   late ScanController controller;
@@ -583,6 +610,83 @@ void main() {
         <ConnectionType>{ConnectionType.classic},
         <ConnectionType>{ConnectionType.ble},
       ]);
+    });
+
+    test(
+      'classicFirst ignores an explicit types: on round 1, non-iOS host',
+      () async {
+        await controller.startScan(
+          types: const <ConnectionType>{ConnectionType.ble},
+          strategy: ScanStrategy.classicFirst,
+        );
+        expect(platform.typesCalls, <Set<ConnectionType>>[
+          <ConnectionType>{ConnectionType.classic},
+        ]);
+      },
+    );
+  });
+
+  group('roundOneTypes', () {
+    test('iOS -> {ble}, non-iOS -> {classic}', () {
+      expect(ScanController.roundOneTypes(isIOS: true), <ConnectionType>{
+        ConnectionType.ble,
+      });
+      expect(ScanController.roundOneTypes(isIOS: false), <ConnectionType>{
+        ConnectionType.classic,
+      });
+    });
+  });
+
+  group('orphaned scan on stopScan race', () {
+    test('a manual stopScan racing the round-1->round-2 transition stops the '
+        'just-started BLE scan instead of orphaning it', () async {
+      final _GatedStartPlatform gatedPlatform = _GatedStartPlatform();
+      final ScanController gatedController = ScanController(
+        platform: gatedPlatform,
+        emitInterval: Duration.zero,
+      );
+      addTearDown(() async {
+        await gatedController.dispose();
+        await gatedPlatform.close();
+      });
+
+      // Gate round 2's startScan({ble}) — the 2nd call — open on a
+      // Completer so a concurrent stopScan() can be driven to completion
+      // while it is in flight.
+      gatedPlatform.gateAtCallNumber = 2;
+      gatedPlatform.gateOnCall = Completer<void>();
+
+      unawaited(
+        gatedController.startScan(
+          timeout: const Duration(milliseconds: 20),
+          strategy: ScanStrategy.classicFirst,
+        ),
+      );
+
+      // Let round 1 elapse with nothing named; the transition stops
+      // round 1's classic scan and dispatches round 2's startScan({ble}),
+      // which is now parked on the gate.
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(gatedPlatform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+      expect(gatedPlatform.stopScanCalls, 1); // round 1's stop only so far
+
+      // Concurrent manual stop, racing the still-gated round-2 startScan.
+      await gatedController.stopScan();
+      expect(gatedController.isScanning, isFalse);
+      expect(gatedPlatform.stopScanCalls, 2);
+
+      // Release the gate: round 2's startScan resolves inside
+      // _runFallbackRound, which must now observe isScanning == false and
+      // issue a FINAL stopScan to avoid leaving an orphaned native BLE
+      // scan running forever.
+      gatedPlatform.gateOnCall!.complete();
+      await pumpEventQueue();
+
+      expect(gatedPlatform.stopScanCalls, 3);
+      expect(gatedController.isScanning, isFalse);
     });
   });
 }
