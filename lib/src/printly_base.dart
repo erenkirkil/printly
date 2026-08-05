@@ -214,6 +214,12 @@ class Printly {
   /// excluded from [devicesStream] until they are actually seen by an
   /// inquiry — see [ScanController.startScan] for the full semantics.
   ///
+  /// [strategy] defaults to [ScanStrategy.parallel]. Pass
+  /// [ScanStrategy.classicFirst] to scan Classic first on Android and only
+  /// fall back to a single BLE round when nothing named answered — see
+  /// [ScanStrategy.classicFirst] for the full contract, including how it
+  /// interacts with an explicit [types].
+  ///
   /// Safe to call repeatedly — concurrent calls share a single native scan
   /// and the same in-flight future, so duplicate button taps cannot start
   /// parallel scans.
@@ -221,10 +227,12 @@ class Printly {
     Duration? timeout,
     Set<ConnectionType>? types,
     bool includeBonded = true,
+    ScanStrategy strategy = ScanStrategy.parallel,
   }) => _scan.startScan(
     timeout: timeout ?? defaultScanTimeout,
     types: types,
     includeBonded: includeBonded,
+    strategy: strategy,
   );
 
   /// Stops any in-progress scan. A no-op when no scan is running.

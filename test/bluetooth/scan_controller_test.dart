@@ -14,8 +14,10 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   int startScanCalls = 0;
   int stopScanCalls = 0;
   Set<ConnectionType>? lastTypes;
+  final List<Set<ConnectionType>> typesCalls = <Set<ConnectionType>>[];
   Completer<void>? startCompleter;
   Object? startError;
+  Object? startErrorOnCall;
 
   @override
   Stream<PrintlyDevice> get scanResults => _resultsController.stream;
@@ -24,7 +26,11 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   Future<void> startScan({required Set<ConnectionType> types}) async {
     startScanCalls++;
     lastTypes = types;
+    typesCalls.add(types);
     if (startCompleter != null) await startCompleter!.future;
+    if (startErrorOnCall != null && startScanCalls == 2) {
+      throw startErrorOnCall!;
+    }
     if (startError != null) throw startError!;
   }
 
@@ -417,6 +423,166 @@ void main() {
 
       await sub.cancel();
       await coalesced.dispose();
+    });
+  });
+
+  group('classicFirst scan strategy', () {
+    test('(a) no named device in round 1: falls back to a single BLE round, '
+        'preserving the device list and staying "scanning" across the '
+        'transition', () async {
+      final List<bool> scanningFlags = <bool>[];
+      final StreamSubscription<bool> sub = controller.isScanningStream.listen(
+        scanningFlags.add,
+      );
+
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 30),
+        strategy: ScanStrategy.classicFirst,
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.currentDevices, hasLength(1));
+
+      // Past round 1's window (30ms), inside round 2's window (next 30ms).
+      await Future<void>.delayed(const Duration(milliseconds: 45));
+
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+      // Round 2 does not clear what round 1 already found.
+      expect(controller.currentDevices, hasLength(1));
+      expect(controller.currentDevices.single.address, 'AA:BB');
+      // No false emitted between the seeded value, the scan starting, and
+      // now — the classic->ble transition must not flicker isScanning.
+      expect(scanningFlags, <bool>[false, true]);
+      expect(controller.isScanning, isTrue);
+
+      await sub.cancel();
+    });
+
+    test('(b) a named+seenInScan device answers round 1: single platform call, '
+        'no BLE fallback round', () async {
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 20),
+        strategy: ScanStrategy.classicFirst,
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+          name: 'PTP-II',
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+      ]);
+      expect(platform.stopScanCalls, 1);
+      expect(controller.isScanning, isFalse);
+    });
+
+    test('(c) round 2 also finds nothing: no third round is ever started and '
+        'isScanning ends false', () async {
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 20),
+        strategy: ScanStrategy.classicFirst,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+      expect(platform.stopScanCalls, 2);
+      expect(controller.isScanning, isFalse);
+    });
+
+    test('(d) parallel strategy issues a single call with the given types '
+        'verbatim', () async {
+      await controller.startScan(
+        types: const <ConnectionType>{ConnectionType.ble},
+        strategy: ScanStrategy.parallel,
+      );
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+      expect(platform.startScanCalls, 1);
+    });
+
+    test('(e) manual stopScan during round 1 cancels the whole strategy — no '
+        'fallback round', () async {
+      await controller.startScan(
+        timeout: const Duration(days: 1),
+        strategy: ScanStrategy.classicFirst,
+      );
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+      ]);
+
+      await controller.stopScan();
+      // Give any (incorrect) fallback logic a chance to fire.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+      ]);
+      expect(controller.isScanning, isFalse);
+    });
+
+    test('(f) a bonded-seed-only named device (seenInScan false) does not '
+        'count as "found" — fallback still runs', () async {
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 30),
+        strategy: ScanStrategy.classicFirst,
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          isBonded: true,
+          seenInScan: false,
+          name: 'PTP-II',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      await Future<void>.delayed(const Duration(milliseconds: 45));
+
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+      expect(controller.isScanning, isTrue);
+    });
+
+    test("round 2's native startScan failing surfaces through scanErrors and "
+        'ends the scan', () async {
+      platform.startErrorOnCall = PlatformException(
+        code: 'start_scan_failed',
+        message: 'bluetooth_not_powered_on',
+      );
+      final Future<PrintlyException> firstError = controller.scanErrors.first;
+
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 20),
+        strategy: ScanStrategy.classicFirst,
+      );
+      final PrintlyException error = await firstError;
+
+      expect(error, isA<PrintlyScanException>());
+      expect(error.code, PrintlyErrorCode.bluetoothNotPoweredOn);
+      expect(controller.isScanning, isFalse);
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+        <ConnectionType>{ConnectionType.ble},
+      ]);
     });
   });
 }
