@@ -475,5 +475,12 @@ void main() {
         throwsArgumentError,
       );
     });
+
+    test('explicit {A selector bypasses the printable-ASCII gate', () {
+      // Code set A encodes control characters; printly must keep a
+      // caller-supplied selector payload as-is, as barcode() documents.
+      final List<int> bytes = job().barcode('{AAB\x1D12').build();
+      expect(bytes, isNotEmpty);
+    });
   });
 }

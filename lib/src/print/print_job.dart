@@ -217,12 +217,16 @@ class PrintJob {
   ///
   /// [unmappable] chooses what happens to characters the symbology cannot
   /// encode. It only applies to [PrintlyBarcodeType.code128] (target:
-  /// printable ASCII) and [PrintlyBarcodeType.code39] (its narrow charset;
-  /// lowercase is folded to uppercase first). Numeric symbologies and
-  /// CODABAR always validate strictly — substituting characters in a
-  /// check-digit payload would print a scannable-but-wrong code.
+  /// printable ASCII, unless [data] starts with an explicit `{A`/`{B`/`{C`
+  /// code-set selector — that hands the caller manual control and the
+  /// printable-ASCII gate is skipped) and [PrintlyBarcodeType.code39] (its
+  /// narrow charset; lowercase is folded to uppercase first). Numeric
+  /// symbologies and CODABAR always validate strictly — substituting
+  /// characters in a check-digit payload would print a scannable-but-wrong
+  /// code.
   /// [replacement] defaults per symbology (`?` for CODE128, `-` for CODE39)
   /// and must itself be encodable, otherwise [ArgumentError].
+  /// [replacement] has no effect under [PrintlyUnmappable.throwError].
   /// Throws [ArgumentError] when the (sanitized) [data] is not valid for
   /// [type].
   PrintJob barcode(
@@ -275,6 +279,7 @@ class PrintJob {
   /// [PrintlyUnmappable.transliterate] converts readable equivalents via
   /// [TurkishCodePage.toLatin1] and substitutes the rest with [replacement];
   /// [PrintlyUnmappable.replace] substitutes everything above `0xFF`.
+  /// [replacement] has no effect under [PrintlyUnmappable.throwError].
   /// Payloads longer than 2953 bytes (the QR byte-mode maximum, measured
   /// after sanitization — `…` expands to `...`) always throw.
   PrintJob qr(
@@ -544,7 +549,16 @@ class PrintJob {
       // rune would silently print a corrupt symbol. Enforce the documented
       // ArgumentError contract here, against the same charset the
       // sanitizer targets.
+      //
+      // A caller-supplied {A/{B/{C selector takes manual control of the
+      // code set (code set A legitimately encodes 0x00-0x1F), so the
+      // printable-ASCII contract below only guards the auto-{B path.
+      final bool hasSelector =
+          data.length >= 2 &&
+          data[0] == '{' &&
+          (data[1] == 'A' || data[1] == 'B' || data[1] == 'C');
       if (type == PrintlyBarcodeType.code128 &&
+          !hasSelector &&
           data.runes.any((int rune) => !_code128Charset.contains(rune))) {
         throw ArgumentError(
           'Invalid code128 barcode payload: contains characters outside '
