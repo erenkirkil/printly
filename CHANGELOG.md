@@ -47,6 +47,15 @@
   device: the active link's transport, or the last one used once
   disconnected, or `null` if the device has never been connected this
   session.
+- `ScanStrategy` / `Printly.startScan()`'s new `strategy` parameter (default
+  `ScanStrategy.parallel`, current behaviour unchanged) — pass
+  `ScanStrategy.classicFirst` to scan Bluetooth Classic first on Android and
+  fall back to a single BLE round only when nothing named answered, instead
+  of requesting both transports at once. Encodes a field-observed pattern: a
+  Classic inquiry saturates the radio, so scanning it alone first (then BLE
+  only if needed) surfaces printers a parallel scan can miss under
+  contention. No-op two-round loop — there is never a third round. On iOS it
+  degrades silently to a single BLE round.
 
 ### Breaking
 
