@@ -10,6 +10,7 @@ import com.erenkirkil.printly.adapter.AdapterStateStreamHandler
 import com.erenkirkil.printly.connection.ConnectionCoordinator
 import com.erenkirkil.printly.connection.ConnectionEventsStreamHandler
 import com.erenkirkil.printly.scan.ScanResultsStreamHandler
+import com.erenkirkil.printly.util.LocationServices
 import com.erenkirkil.printly.util.PermissionChecker
 import com.erenkirkil.printly.util.WireCodes
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -111,6 +112,10 @@ class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
             WireCodes.Methods.CONNECT -> handleConnect(call, result)
             WireCodes.Methods.DISCONNECT -> handleDisconnect(call, result)
             WireCodes.Methods.WRITE -> handleWrite(call, result)
+            WireCodes.Methods.IS_LOCATION_SERVICE_ENABLED ->
+                result.success(LocationServices.isSatisfied(appContext))
+            WireCodes.Methods.OPEN_LOCATION_SETTINGS ->
+                result.success(openLocationSettings())
             else -> result.notImplemented()
         }
     }
@@ -241,6 +246,19 @@ class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
     private fun openBluetoothSettings(): Boolean {
         val launcher: Context = activity ?: appContext
         val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+            if (launcher !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return try {
+            launcher.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun openLocationSettings(): Boolean {
+        val launcher: Context = activity ?: appContext
+        val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
             if (launcher !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         return try {

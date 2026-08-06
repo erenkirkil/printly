@@ -82,6 +82,31 @@ abstract class PrintlyPlatform extends PlatformInterface {
     );
   }
 
+  /// Whether the OS location service currently gates Bluetooth scanning on
+  /// this device.
+  ///
+  /// On Android below API 31 both Classic inquiry and BLE scanning depend on
+  /// the location service — not just the location *permission* — and return
+  /// no results at all (with no platform error) when it is off. From API 31
+  /// printly declares `BLUETOOTH_SCAN` with `neverForLocation`, which removes
+  /// the dependency entirely, so this always returns `true` there. iOS never
+  /// depends on the location service for Bluetooth, so this always returns
+  /// `true` on iOS too.
+  Future<bool> isLocationServiceEnabled() {
+    throw UnimplementedError(
+      'isLocationServiceEnabled() has not been implemented.',
+    );
+  }
+
+  /// Opens the system location settings page so the user can turn the
+  /// location service on. Android only — returns `false` as a no-op on iOS,
+  /// where this SDK does not touch CoreLocation.
+  Future<bool> openLocationSettings() {
+    throw UnimplementedError(
+      'openLocationSettings() has not been implemented.',
+    );
+  }
+
   /// Asks the native side to start discovering devices of the given [types].
   ///
   /// The returned future completes as soon as the native scan has been

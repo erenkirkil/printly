@@ -65,6 +65,8 @@ extension WireCodes {
         static let connect = "connect"
         static let disconnect = "disconnect"
         static let write = "write"
+        static let isLocationServiceEnabled = "isLocationServiceEnabled"
+        static let openLocationSettings = "openLocationSettings"
     }
 
     /// Payload keys used in method arguments and event maps.
@@ -103,6 +105,7 @@ extension WireCodes {
         static let networkNotSupported = "network_not_supported"
         static let classicRequiresMfi = "classic_requires_mfi"
         static let unsupportedPlatform = "unsupported_platform"
+        static let locationServicesDisabled = "location_services_disabled"
 
         // Not part of the shared PrintlyErrorCode vocabulary, but still
         // channel-crossing strings that Android emits with identical bytes.

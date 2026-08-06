@@ -38,6 +38,10 @@ void main() {
               return true;
             case 'requestEnableBluetooth':
               return true;
+            case 'isLocationServiceEnabled':
+              return false;
+            case 'openLocationSettings':
+              return true;
             default:
               return null;
           }
@@ -90,6 +94,33 @@ void main() {
     await expectLater(
       platform.requestEnableBluetooth(),
       throwsA(isA<PrintlyPermissionException>()),
+    );
+  });
+
+  test(
+    'isLocationServiceEnabled invokes the wire method and returns the flag',
+    () async {
+      expect(await platform.isLocationServiceEnabled(), isFalse);
+      expect(invocations.single.method, 'isLocationServiceEnabled');
+    },
+  );
+
+  test(
+    'openLocationSettings invokes the wire method and returns the flag',
+    () async {
+      expect(await platform.openLocationSettings(), isTrue);
+      expect(invocations.single.method, 'openLocationSettings');
+    },
+  );
+
+  test('locationServicesDisabled round-trips through its wire name', () {
+    expect(
+      PrintlyErrorCode.fromWireName('location_services_disabled'),
+      PrintlyErrorCode.locationServicesDisabled,
+    );
+    expect(
+      PrintlyErrorCode.locationServicesDisabled.wireName,
+      'location_services_disabled',
     );
   });
 
@@ -315,6 +346,25 @@ void main() {
         ),
       );
     });
+
+    test(
+      'startScan surfaces location_services_disabled as a typed scan error',
+      () async {
+        throwOnInvoke('start_scan_failed', 'location_services_disabled');
+        await expectLater(
+          platform.startScan(
+            types: const <ConnectionType>{ConnectionType.classic},
+          ),
+          throwsA(
+            isA<PrintlyScanException>().having(
+              (PrintlyScanException e) => e.code,
+              'code',
+              PrintlyErrorCode.locationServicesDisabled,
+            ),
+          ),
+        );
+      },
+    );
 
     test('permission failures map to PrintlyPermissionException', () async {
       throwOnInvoke('permission_denied', 'bluetooth_scan_denied');
