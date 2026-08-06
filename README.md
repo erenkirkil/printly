@@ -256,6 +256,32 @@ class _PrinterPickerState extends State<PrinterPicker> {
 }
 ```
 
+### Connecting without scanning (known address)
+
+Scanning is a discovery affordance, not a requirement. If you already know
+the printer's MAC address — a fixed fleet, a QR label on the device, an
+address stored by your own app — construct the `PrintlyDevice` yourself and
+connect directly:
+
+```dart
+const printer = PrintlyDevice(
+  address: 'DC:0D:30:12:34:56',
+  availableTransports: {ConnectionType.classic}, // or {ConnectionType.ble}
+);
+await printly.connect(printer);
+```
+
+This skips the scan entirely: no location-service gate, no 10-second wait,
+no list to pick from. It also composes into a "remember my printer" flow —
+persist `address` and the transport with whatever storage your app already
+uses, rebuild the device on startup, connect.
+
+**iOS caveat:** on iOS the `address` is not a MAC — CoreBluetooth hides MAC
+addresses and identifies peripherals by a per-phone UUID that can only be
+learned from a scan. Direct-address connect is therefore an Android
+technique; on iOS, store the UUID your app observed in a previous scan of
+that same phone, or scan again.
+
 ## Platform setup
 
 ### Android
