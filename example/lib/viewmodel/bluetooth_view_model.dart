@@ -32,36 +32,67 @@ class BluetoothViewModel extends ChangeNotifier {
   }
 
   Future<void> requestPermissions() async {
-    final PrintlyPermissionStatus status = await Printly.instance
-        .requestPermissions();
-    _lastPermissionStatus = status;
-    _log.success('requestPermissions → ${status.name}');
-    notifyListeners();
+    try {
+      final PrintlyPermissionStatus status = await Printly.instance
+          .requestPermissions();
+      _lastPermissionStatus = status;
+      _log.success('requestPermissions → ${status.name}');
+      notifyListeners();
+    } catch (error) {
+      _log.failure('requestPermissions error → $error');
+    }
   }
 
   Future<void> requestEnableBluetooth() async {
-    final bool shown = await Printly.instance.requestEnableBluetooth();
-    _log.success(
-      'requestEnableBluetooth → '
-      '${shown ? 'request shown' : 'no-op (already on / unavailable)'}',
-    );
+    try {
+      final bool shown = await Printly.instance.requestEnableBluetooth();
+      _log.success(
+        'requestEnableBluetooth → '
+        '${shown ? 'request shown' : 'no-op (already on / unavailable)'}',
+      );
+    } on PrintlyPermissionException catch (error) {
+      // Android 12+ gates the enable dialog itself behind BLUETOOTH_CONNECT,
+      // so printly refuses rather than firing an intent the OS would drop.
+      // Surface the remedy instead of the raw error.
+      _log.failure(
+        'requestEnableBluetooth → grant Bluetooth permissions first '
+        '(Request Bluetooth permissions above) · $error',
+      );
+    } catch (error) {
+      _log.failure('requestEnableBluetooth error → $error');
+    }
   }
 
   Future<void> openBluetoothSettings() async {
-    final bool opened = await Printly.instance.openBluetoothSettings();
-    _log.success('openBluetoothSettings → ${opened ? 'ok' : 'failed'}');
+    try {
+      final bool opened = await Printly.instance.openBluetoothSettings();
+      _log.success('openBluetoothSettings → ${opened ? 'ok' : 'failed'}');
+    } catch (error) {
+      _log.failure('openBluetoothSettings error → $error');
+    }
   }
 
   Future<void> openAppSettings() async {
-    final bool opened = await Printly.instance.openAppSettings();
-    _log.success('openAppSettings → ${opened ? 'ok' : 'failed'}');
+    try {
+      final bool opened = await Printly.instance.openAppSettings();
+      _log.success('openAppSettings → ${opened ? 'ok' : 'failed'}');
+    } catch (error) {
+      _log.failure('openAppSettings error → $error');
+    }
   }
 
   Future<void> openLocationSettings() async {
-    final bool opened = await Printly.instance.openLocationSettings();
-    _log.success(
-      'openLocationSettings → ${opened ? 'ok' : 'not applicable on this platform'}',
-    );
+    try {
+      final bool opened = await Printly.instance.openLocationSettings();
+      _log.success(
+        'openLocationSettings → '
+        '${opened ? 'ok' : 'not applicable on this platform'}',
+      );
+    } catch (error) {
+      // A MissingPluginException here means the running app still carries the
+      // previous native build — a hot restart reloads Dart but not Kotlin.
+      _log.failure('openLocationSettings error → $error');
+    }
   }
 
   @override
