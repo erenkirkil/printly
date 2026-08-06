@@ -282,7 +282,11 @@ abstract final class TurkishCodePage {
       PrintlyCharset.utf8 => null,
     };
 
-    final BytesBuilder out = BytesBuilder(copy: false);
+    // The copying builder, deliberately: the non-copying variant's addByte
+    // wraps EVERY byte in its own 1-element Uint8List chunk (see the SDK's
+    // bytes_builder.dart), which for receipt-sized strings means one
+    // allocation per character. The copying builder grows a single buffer.
+    final BytesBuilder out = BytesBuilder();
     for (final int rune in text.runes) {
       if (rune < 0x80) {
         out.addByte(rune);
