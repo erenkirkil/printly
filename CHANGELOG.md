@@ -1,3 +1,16 @@
+## Unreleased
+
+### Fixed
+
+- `devicesStream` no longer keeps emitting after `stopScan()` has completed.
+  Android's `BluetoothLeScanner.stopScan()` is asynchronous, so results
+  buffered on the event channel kept landing after `isScanning` had already
+  reported `false` — silently growing the "final" list a consumer had just
+  rendered (measured in the field: 115 → 141 entries after "scan finished").
+  Results arriving while the stop is still in flight, and during the
+  `classicFirst` round transition, are still accepted; only results after
+  the scan has genuinely ended are dropped.
+
 ## 0.2.0 — 2026-08-06
 
 Merges Classic/BLE sightings of one printer into a single `PrintlyDevice`

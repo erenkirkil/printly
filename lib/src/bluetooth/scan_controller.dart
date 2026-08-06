@@ -432,6 +432,16 @@ class ScanController {
 
   void _onDeviceDiscovered(PrintlyDevice device) {
     if (_disposed) return;
+    // Android's BluetoothLeScanner.stopScan() is asynchronous: results
+    // buffered on the event channel keep landing after [_runStop] has
+    // published `isScanning: false`, silently growing the "final" list a
+    // consumer just rendered (measured in the field: 115 → 141 entries
+    // after "scan finished"). Dropping them here keeps the stop terminal.
+    // Results arriving while a stop is merely in flight are unaffected —
+    // [_runStop] flips [isScanning] only after the native call returns —
+    // and the classicFirst round transition deliberately holds [isScanning]
+    // `true`, so round-2 results are unaffected too.
+    if (!isScanning) return;
     if (!_includeBonded && !device.seenInScan) return;
     final PrintlyDevice? existing = _dedup[device.dedupKey];
     final PrintlyDevice merged = existing == null

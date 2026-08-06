@@ -16,6 +16,7 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   Set<ConnectionType>? lastTypes;
   final List<Set<ConnectionType>> typesCalls = <Set<ConnectionType>>[];
   Completer<void>? startCompleter;
+  Completer<void>? stopCompleter;
   Object? startError;
   Object? startErrorOnCall;
 
@@ -37,6 +38,7 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   @override
   Future<void> stopScan() async {
     stopScanCalls++;
+    if (stopCompleter != null) await stopCompleter!.future;
   }
 
   void emit(PrintlyDevice device) => _resultsController.add(device);
@@ -428,6 +430,9 @@ void main() {
         platform: platform,
         emitInterval: const Duration(milliseconds: 50),
       );
+      // A scan must actually be running: discoveries landing with no scan
+      // in flight are dropped (the post-stop late-result guard).
+      await coalesced.startScan();
       final List<int> lengths = <int>[];
       final StreamSubscription<List<PrintlyDevice>> sub = coalesced
           .devicesStream
@@ -687,6 +692,91 @@ void main() {
 
       expect(gatedPlatform.stopScanCalls, 3);
       expect(gatedController.isScanning, isFalse);
+    });
+  });
+
+  group('post-stop late results (field bug)', () {
+    // Android's BluetoothLeScanner.stopScan() is asynchronous: results
+    // buffered on the event channel keep arriving AFTER the controller has
+    // published `isScanning: false`. Measured in the field: the list kept
+    // growing from 115 to 141 entries after "scan finished" was shown.
+    test('a result arriving after stopScan completed is dropped — the list '
+        'and the stream stay frozen', () async {
+      await controller.startScan();
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+
+      final List<List<PrintlyDevice>> emissions = <List<PrintlyDevice>>[];
+      final StreamSubscription<List<PrintlyDevice>> sub = controller
+          .devicesStream
+          .listen(emissions.add);
+      addTearDown(sub.cancel);
+
+      await controller.stopScan();
+      await pumpEventQueue();
+      final int emissionsAtStop = emissions.length;
+
+      // The late, buffered native result lands after the final flush.
+      platform.emit(
+        PrintlyDevice(
+          address: 'CC:DD',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(
+        controller.currentDevices,
+        hasLength(1),
+        reason: 'a result after stop must not join the list',
+      );
+      expect(
+        emissions.length,
+        emissionsAtStop,
+        reason: 'devicesStream must stay silent once the scan has stopped',
+      );
+    });
+
+    test('results arriving while the stop is still in flight ARE accepted '
+        'and included in the final flush', () async {
+      await controller.startScan();
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      // Park the native stop on a gate: the scan is genuinely still running
+      // while the platform processes the stop request.
+      platform.stopCompleter = Completer<void>();
+      final Future<void> stopping = controller.stopScan();
+      await pumpEventQueue();
+      expect(controller.isScanning, isTrue);
+
+      platform.emit(
+        PrintlyDevice(
+          address: 'CC:DD',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      platform.stopCompleter!.complete();
+      await stopping;
+
+      expect(
+        controller.currentDevices,
+        hasLength(2),
+        reason: 'a result during a genuinely-running scan is still current',
+      );
     });
   });
 }
