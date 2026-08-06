@@ -98,6 +98,12 @@ class SettingsTab extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: bluetooth.openLocationSettings,
+              icon: const Icon(Icons.location_on),
+              label: const Text('Open location settings'),
+            ),
           ],
         );
       },

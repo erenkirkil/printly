@@ -79,6 +79,16 @@ class ScanViewModel extends ChangeNotifier {
             return;
           }
         }
+        if (!await Printly.instance.isLocationServiceEnabled()) {
+          // Android below API 31 finds nothing at all with the service off, and
+          // the platform reports no error — say so instead of showing an empty
+          // list the user cannot explain.
+          _log.failure(
+            'scan aborted → location service off (Android <12 needs it; '
+            'Settings → Open location settings)',
+          );
+          return;
+        }
         Printly.instance.clearDevices();
         await Printly.instance.startScan();
         _log.success('startScan → ok');

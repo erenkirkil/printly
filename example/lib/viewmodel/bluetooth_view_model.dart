@@ -57,6 +57,13 @@ class BluetoothViewModel extends ChangeNotifier {
     _log.success('openAppSettings → ${opened ? 'ok' : 'failed'}');
   }
 
+  Future<void> openLocationSettings() async {
+    final bool opened = await Printly.instance.openLocationSettings();
+    _log.success(
+      'openLocationSettings → ${opened ? 'ok' : 'not applicable on this platform'}',
+    );
+  }
+
   @override
   void dispose() {
     unawaited(_adapterSub?.cancel());
