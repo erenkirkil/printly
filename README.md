@@ -225,11 +225,24 @@ drop the location-service requirement) or to iOS — on both,
 `isLocationServiceEnabled()` always returns `true` and `openLocationSettings()`
 is a no-op that returns `false`.
 
-Pass `strategy: ScanStrategy.classicFirst` to scan Bluetooth Classic first on
-Android and fall back to a single BLE round only if nothing named answered,
-instead of requesting both transports at once — a Classic inquiry saturates
-the radio, so a parallel scan can miss BLE-only printers under contention.
-It degrades silently to a single BLE round on iOS.
+**Classic printers and the scan timeout.** Android's Classic inquiry cycle
+takes ~12.8 s end to end; the 10 s default window can cut it short, so a
+Classic-only printer that answers late in the cycle may be missed. In
+Classic-heavy environments, give the inquiry room to finish:
+
+```dart
+printly.defaultScanTimeout = const Duration(seconds: 15);
+```
+
+`ScanStrategy.classicFirst` (opt-in, experimental) scans Classic first on
+Android and falls back to a single BLE round only if nothing named answered —
+the idea being that a Classic inquiry saturates the radio and a parallel scan
+can miss BLE-only printers under contention. **Field data has not yet shown
+round 1 confirming a device** (see the timeout note above — the round-1
+window structurally undercuts the inquiry cycle), so prefer the default
+`parallel` strategy unless you have measured a benefit on your hardware;
+reports welcome via the "New Printer Test" issue template. It degrades
+silently to a single BLE round on iOS.
 
 For screen-scoped scanning (e.g. a "pick a printer" dialog), use
 `newScanSession()` instead of the process-lifetime `devicesStream`/
