@@ -203,6 +203,28 @@ entries — connecting to one can still end in a timeout. Pass
 until an inquiry actually confirms them, or check `seenInScan` yourself
 before offering a "connect" affordance on an unconfirmed entry.
 
+**The location-service trap (Android 6–11).** On Android API < 31, Bluetooth
+discovery is also gated on the OS location *service* (not just the location
+*permission*) — granting the permission is not enough. With the service off,
+scans return zero results and the platform raises no error, so the app has no
+signal to explain the empty list. printly detects this and rejects
+`startScan()` with `PrintlyScanException(PrintlyErrorCode.locationServicesDisabled)`
+instead. Check ahead of time with `isLocationServiceEnabled()` and route the
+user to the right screen with `openLocationSettings()`:
+
+```dart
+if (!await printly.isLocationServiceEnabled()) {
+  await printly.openLocationSettings();
+  return;
+}
+await printly.startScan();
+```
+
+This does not apply to Android 12+ (`neverForLocation` Bluetooth permissions
+drop the location-service requirement) or to iOS — on both,
+`isLocationServiceEnabled()` always returns `true` and `openLocationSettings()`
+is a no-op that returns `false`.
+
 Pass `strategy: ScanStrategy.classicFirst` to scan Bluetooth Classic first on
 Android and fall back to a single BLE round only if nothing named answered,
 instead of requesting both transports at once — a Classic inquiry saturates
