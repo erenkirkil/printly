@@ -55,7 +55,10 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   Stream<PrintlyDevice> get scanResults => const Stream<PrintlyDevice>.empty();
 
   @override
-  Future<void> startScan({required Set<ConnectionType> types}) async {}
+  Future<void> startScan({
+    required Set<ConnectionType> types,
+    bool includeUnnamed = false,
+  }) async {}
 
   @override
   Future<void> stopScan() async {}

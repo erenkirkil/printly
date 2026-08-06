@@ -22,7 +22,10 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   Future<bool> openBluetoothSettings() async => true;
 
   @override
-  Future<void> startScan({required Set<ConnectionType> types}) async {}
+  Future<void> startScan({
+    required Set<ConnectionType> types,
+    bool includeUnnamed = false,
+  }) async {}
 
   @override
   Future<void> stopScan() async {}

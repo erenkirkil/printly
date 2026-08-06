@@ -51,8 +51,17 @@ internal class ScanResultsStreamHandler(
      * Begins scanning for the requested transport codes. Throws on missing
      * permission / unavailable hardware / powered-off adapter so the method
      * channel call can reject with a structured error.
+     *
+     * [includeUnnamed] controls whether nameless BLE advertisements are
+     * reported at all; when false (the default wire value) they are dropped
+     * inside [BleScanSession] before crossing the event channel — measured
+     * in the field, 135 of 141 records in one office scan were nameless
+     * privacy-rotated phones/wearables/beacons. Classic results are never
+     * filtered here: inquiry can deliver the device name in a later
+     * follow-up broadcast, so a nameless Classic sighting is still a
+     * potential printer.
      */
-    fun start(types: List<Int>) {
+    fun start(types: List<Int>, includeUnnamed: Boolean = false) {
         val adapter = currentAdapter()
             ?: throw IllegalStateException(WireCodes.Reasons.BLUETOOTH_UNAVAILABLE)
         if (!PermissionChecker.hasScan(appContext)) {
@@ -79,7 +88,12 @@ internal class ScanResultsStreamHandler(
                 .also { it.start(inquire = inquire) }
         }
         if (WireCodes.TYPE_BLE in types) {
-            ble = BleScanSession(adapter, ::emit, ::emitScanError).also { it.start() }
+            ble = BleScanSession(
+                adapter,
+                ::emit,
+                ::emitScanError,
+                includeUnnamed = includeUnnamed,
+            ).also { it.start() }
         }
     }
 

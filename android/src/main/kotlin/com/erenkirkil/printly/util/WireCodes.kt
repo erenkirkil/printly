@@ -57,6 +57,7 @@ internal object WireCodes {
         const val DEVICE = "device"
         const val TIMEOUT_MS = "timeoutMs"
         const val TYPES = "types"
+        const val INCLUDE_UNNAMED = "includeUnnamed"
         const val BYTES = "bytes"
         const val ADDRESS = "address"
         const val TYPE = "type"

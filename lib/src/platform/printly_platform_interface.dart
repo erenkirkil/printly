@@ -115,7 +115,18 @@ abstract class PrintlyPlatform extends PlatformInterface {
   /// `ScanController` to stop the scan. Transport types not supported on the
   /// current platform (e.g. [ConnectionType.classic] on iOS) are silently
   /// dropped by the native side.
-  Future<void> startScan({required Set<ConnectionType> types}) {
+  ///
+  /// When [includeUnnamed] is `false` (the default) the native side drops
+  /// nameless BLE advertisements before they ever cross the channel —
+  /// measured in the field, 135 of 141 scan records were nameless
+  /// privacy-rotated phones/wearables/beacons that no consumer can present
+  /// as a printer choice. Classic results are never filtered here: a
+  /// Classic inquiry may report the name in a later follow-up broadcast,
+  /// so an early nameless sighting can still become a real printer.
+  Future<void> startScan({
+    required Set<ConnectionType> types,
+    bool includeUnnamed = false,
+  }) {
     throw UnimplementedError('startScan() has not been implemented.');
   }
 

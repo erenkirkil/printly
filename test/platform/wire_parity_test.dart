@@ -58,6 +58,7 @@ void main() {
     WireProtocol.keyDevice,
     WireProtocol.keyTimeoutMs,
     WireProtocol.keyTypes,
+    WireProtocol.keyIncludeUnnamed,
     WireProtocol.keyBytes,
     WireProtocol.keyAddress,
     WireProtocol.keyType,

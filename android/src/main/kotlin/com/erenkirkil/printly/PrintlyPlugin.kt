@@ -125,7 +125,9 @@ class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
             val types: List<Int> = call.argument<List<Any?>>(WireCodes.Keys.TYPES)
                 ?.mapNotNull { (it as? Number)?.toInt() }
                 ?: emptyList()
-            scanResultsHandler.start(types)
+            val includeUnnamed: Boolean =
+                call.argument<Boolean>(WireCodes.Keys.INCLUDE_UNNAMED) ?: false
+            scanResultsHandler.start(types, includeUnnamed)
             result.success(null)
         } catch (e: SecurityException) {
             result.error(WireCodes.Reasons.PERMISSION_DENIED, e.message, null)

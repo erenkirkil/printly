@@ -1,5 +1,28 @@
 ## Unreleased
 
+### Breaking
+
+- `startScan()` now excludes nameless BLE advertisements by default.
+  Measured in the field, 135 of 141 records in one office scan were
+  nameless privacy-rotated phones, wearables and beacons that no consumer
+  can present as a printer choice; they are now filtered natively, before
+  ever crossing the platform channel. Pass `includeUnnamed: true`
+  (available on `startScan()` and `PrintlyScanSession.start()`) to see
+  everything, e.g. in diagnostic UIs. Nameless **Classic** sightings are
+  never filtered (Android inquiry can deliver the name in a later
+  follow-up broadcast), and neither are nameless re-sightings of devices
+  already on the list (RSSI refreshes from frames that omit the local
+  name). `PrintlyPlatform.startScan()` gains a `bool includeUnnamed`
+  parameter — custom platform implementations must add it to their
+  override.
+
+### Added
+
+- Connecting by a known address without any scan is now documented in the
+  README — the public `PrintlyDevice` constructor has always allowed it
+  (Android; on iOS the address is a per-phone CoreBluetooth UUID that must
+  come from a previous scan).
+
 ### Fixed
 
 - `devicesStream` no longer keeps emitting after `stopScan()` has completed.

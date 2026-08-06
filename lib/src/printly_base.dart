@@ -283,6 +283,17 @@ class Printly {
   /// excluded from [devicesStream] until they are actually seen by an
   /// inquiry — see [ScanController.startScan] for the full semantics.
   ///
+  /// When [includeUnnamed] is `false` (the default) nameless BLE
+  /// advertisements — overwhelmingly privacy-rotated phones, wearables and
+  /// beacons, measured at 135 of 141 records in one office scan — are
+  /// excluded, natively where possible so they never even cross the
+  /// platform channel. A thermal printer must advertise its name to be
+  /// pickable, so the default hides only what no user could choose. Pass
+  /// `true` for diagnostic UIs that must show everything. Nameless
+  /// *Classic* sightings are always kept (their name can arrive in a later
+  /// inquiry broadcast), as are nameless re-sightings of devices already on
+  /// the list (RSSI refreshes) — see [ScanController.startScan].
+  ///
   /// [strategy] defaults to [ScanStrategy.parallel]. Pass
   /// [ScanStrategy.classicFirst] to scan Classic first on Android and only
   /// fall back to a single BLE round when nothing named answered — see
@@ -296,11 +307,13 @@ class Printly {
     Duration? timeout,
     Set<ConnectionType>? types,
     bool includeBonded = true,
+    bool includeUnnamed = false,
     ScanStrategy strategy = ScanStrategy.parallel,
   }) => _scan.startScan(
     timeout: timeout ?? defaultScanTimeout,
     types: types,
     includeBonded: includeBonded,
+    includeUnnamed: includeUnnamed,
     strategy: strategy,
   );
 

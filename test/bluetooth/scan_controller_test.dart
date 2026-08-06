@@ -23,11 +23,17 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   @override
   Stream<PrintlyDevice> get scanResults => _resultsController.stream;
 
+  final List<bool> includeUnnamedCalls = <bool>[];
+
   @override
-  Future<void> startScan({required Set<ConnectionType> types}) async {
+  Future<void> startScan({
+    required Set<ConnectionType> types,
+    bool includeUnnamed = false,
+  }) async {
     startScanCalls++;
     lastTypes = types;
     typesCalls.add(types);
+    includeUnnamedCalls.add(includeUnnamed);
     if (startCompleter != null) await startCompleter!.future;
     if (startErrorOnCall != null && startScanCalls == 2) {
       throw startErrorOnCall!;
@@ -78,10 +84,14 @@ class _GatedStartPlatform extends _FakePlatform {
   Completer<void>? gateOnCall;
 
   @override
-  Future<void> startScan({required Set<ConnectionType> types}) async {
+  Future<void> startScan({
+    required Set<ConnectionType> types,
+    bool includeUnnamed = false,
+  }) async {
     startScanCalls++;
     lastTypes = types;
     typesCalls.add(types);
+    includeUnnamedCalls.add(includeUnnamed);
     if (startScanCalls == gateAtCallNumber && gateOnCall != null) {
       await gateOnCall!.future;
     }
@@ -282,6 +292,7 @@ void main() {
       platform.emit(
         PrintlyDevice(
           address: 'AA:BB',
+          name: 'PTP-II',
           availableTransports: <ConnectionType>{ConnectionType.ble},
         ),
       );
@@ -443,6 +454,7 @@ void main() {
         platform.emit(
           PrintlyDevice(
             address: 'D$i',
+            name: 'Printer $i',
             availableTransports: <ConnectionType>{ConnectionType.ble},
           ),
         );
@@ -695,6 +707,96 @@ void main() {
     });
   });
 
+  group('includeUnnamed', () {
+    PrintlyDevice unnamed(String address, ConnectionType transport) =>
+        PrintlyDevice(
+          address: address,
+          availableTransports: <ConnectionType>{transport},
+        );
+
+    test('defaults to false and is passed through to the platform on every '
+        'round, including the classicFirst fallback', () async {
+      await controller.startScan(timeout: const Duration(milliseconds: 20));
+      expect(platform.includeUnnamedCalls, <bool>[false]);
+      await controller.stopScan();
+
+      await controller.startScan(includeUnnamed: true);
+      expect(platform.includeUnnamedCalls, <bool>[false, true]);
+      await controller.stopScan();
+
+      // classicFirst with nothing named: the BLE fallback round must carry
+      // the same includeUnnamed the caller chose for the scan.
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 20),
+        strategy: ScanStrategy.classicFirst,
+        includeUnnamed: true,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(platform.includeUnnamedCalls, <bool>[false, true, true, true]);
+    });
+
+    test('by default a nameless BLE sighting is dropped at the Dart layer '
+        'too (defense in depth over the native filter)', () async {
+      await controller.startScan();
+      platform.emit(unnamed('AA:BB', ConnectionType.ble));
+      await pumpEventQueue();
+      expect(controller.currentDevices, isEmpty);
+    });
+
+    test('includeUnnamed: true lets nameless BLE sightings through', () async {
+      await controller.startScan(includeUnnamed: true);
+      platform.emit(unnamed('AA:BB', ConnectionType.ble));
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+    });
+
+    test('a nameless BLE re-sighting of an already-known device still '
+        'merges — real peripherals alternate named/nameless frames', () async {
+      await controller.startScan();
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          rssi: -70,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          rssi: -45,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      final PrintlyDevice merged = controller.currentDevices.single;
+      expect(merged.name, 'PTP-II');
+      expect(merged.rssi, -45, reason: 'the RSSI refresh must not be dropped');
+    });
+
+    test('a nameless CLASSIC sighting is never dropped — inquiry may report '
+        'the name in a later follow-up broadcast', () async {
+      await controller.startScan();
+      platform.emit(unnamed('AA:BB', ConnectionType.classic));
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+
+      // The late name lands and merges into the same record.
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices.single.name, 'PTP-II');
+    });
+  });
+
   group('post-stop late results (field bug)', () {
     // Android's BluetoothLeScanner.stopScan() is asynchronous: results
     // buffered on the event channel keep arriving AFTER the controller has
@@ -706,6 +808,7 @@ void main() {
       platform.emit(
         PrintlyDevice(
           address: 'AA:BB',
+          name: 'PTP-II',
           availableTransports: <ConnectionType>{ConnectionType.ble},
         ),
       );
@@ -726,6 +829,7 @@ void main() {
       platform.emit(
         PrintlyDevice(
           address: 'CC:DD',
+          name: 'Late arrival',
           availableTransports: <ConnectionType>{ConnectionType.ble},
         ),
       );
@@ -749,6 +853,7 @@ void main() {
       platform.emit(
         PrintlyDevice(
           address: 'AA:BB',
+          name: 'PTP-II',
           availableTransports: <ConnectionType>{ConnectionType.ble},
         ),
       );
@@ -764,6 +869,7 @@ void main() {
       platform.emit(
         PrintlyDevice(
           address: 'CC:DD',
+          name: 'Mid-stop arrival',
           availableTransports: <ConnectionType>{ConnectionType.ble},
         ),
       );

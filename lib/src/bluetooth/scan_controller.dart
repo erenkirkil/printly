@@ -125,6 +125,7 @@ class ScanController {
   Future<void>? _pendingStop;
   bool _disposed = false;
   bool _includeBonded = true;
+  bool _includeUnnamed = false;
 
   /// Whether the in-progress scan is running the Android two-round
   /// [ScanStrategy.classicFirst] transition (i.e. `strategy` was
@@ -200,6 +201,18 @@ class ScanController {
   /// result still appears once [PrintlyDevice.mergeWith] flips
   /// [PrintlyDevice.seenInScan] to `true`.
   ///
+  /// When [includeUnnamed] is `false` (the default) nameless BLE
+  /// advertisements are excluded — natively where possible (so they never
+  /// cross the platform channel) and again here as defense in depth.
+  /// Measured in the field, 135 of 141 records in one office scan were
+  /// nameless privacy-rotated phones, wearables and beacons; a thermal
+  /// printer must advertise its name to be pickable, so the default hides
+  /// what no consumer can present as a choice. Pass `true` to see
+  /// everything (diagnostic UIs, or pairing flows that identify a device by
+  /// address). Nameless *Classic* sightings are never dropped: Android's
+  /// inquiry can deliver the name in a later follow-up broadcast, and the
+  /// record completes via [PrintlyDevice.mergeWith].
+  ///
   /// [strategy] defaults to [ScanStrategy.parallel] (the historical
   /// behaviour: [types] requested in one native scan). See
   /// [ScanStrategy.classicFirst] for the Android Classic-then-BLE fallback
@@ -209,6 +222,7 @@ class ScanController {
     Duration? timeout,
     Set<ConnectionType>? types,
     bool includeBonded = true,
+    bool includeUnnamed = false,
     ScanStrategy strategy = ScanStrategy.parallel,
   }) {
     _assertNotDisposed();
@@ -230,6 +244,7 @@ class ScanController {
               timeout: effectiveTimeout,
               types: effectiveTypes,
               includeBonded: includeBonded,
+              includeUnnamed: includeUnnamed,
               strategy: strategy,
             ),
           );
@@ -241,6 +256,7 @@ class ScanController {
       timeout: effectiveTimeout,
       types: effectiveTypes,
       includeBonded: includeBonded,
+      includeUnnamed: includeUnnamed,
       strategy: strategy,
     );
     return _pendingStart!;
@@ -275,6 +291,7 @@ class ScanController {
     required Duration timeout,
     required Set<ConnectionType> types,
     required bool includeBonded,
+    required bool includeUnnamed,
     required ScanStrategy strategy,
   }) async {
     try {
@@ -282,6 +299,7 @@ class ScanController {
       _emitTimer = null;
       _dedup.clear();
       _includeBonded = includeBonded;
+      _includeUnnamed = includeUnnamed;
       _devicesSubject.add(const <PrintlyDevice>[]);
       _isScanningSubject.add(true);
 
@@ -297,7 +315,10 @@ class ScanController {
           ? roundOneTypes(isIOS: Platform.isIOS)
           : types;
 
-      await _platform.startScan(types: round1Types);
+      await _platform.startScan(
+        types: round1Types,
+        includeUnnamed: includeUnnamed,
+      );
       _timeoutTimer?.cancel();
       _timeoutTimer = Timer(timeout, _onScanWindowElapsed);
     } catch (_) {
@@ -366,6 +387,7 @@ class ScanController {
       if (_disposed || !isScanning) return;
       await _platform.startScan(
         types: const <ConnectionType>{ConnectionType.ble},
+        includeUnnamed: _includeUnnamed,
       );
       // Post-start hole: a concurrent stop raced this startScan() and lost,
       // so the native BLE scan we just started is orphaned unless we stop
@@ -443,6 +465,24 @@ class ScanController {
     // `true`, so round-2 results are unaffected too.
     if (!isScanning) return;
     if (!_includeBonded && !device.seenInScan) return;
+    // Defense in depth over the native unnamed filter: nameless BLE
+    // sightings of UNKNOWN devices never reach consumers, even from a
+    // platform implementation that predates (or skips) the native-side
+    // filtering. Two deliberate exemptions:
+    // - Classic sightings: Android inquiry may report the name in a later
+    //   follow-up broadcast, so an early nameless Classic sighting can
+    //   still become a real printer once [PrintlyDevice.mergeWith] fills
+    //   the name in.
+    // - Already-known devices: real peripherals alternate between frames
+    //   with and without the local name (the name often rides the scan
+    //   response only), so a nameless re-sighting of a device the list
+    //   already shows is an RSSI/transport refresh, not noise.
+    if (!_includeUnnamed &&
+        !device.hasName &&
+        !device.availableTransports.contains(ConnectionType.classic) &&
+        !_dedup.containsKey(device.dedupKey)) {
+      return;
+    }
     final PrintlyDevice? existing = _dedup[device.dedupKey];
     final PrintlyDevice merged = existing == null
         ? device
