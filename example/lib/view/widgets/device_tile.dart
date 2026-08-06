@@ -3,6 +3,14 @@ import 'package:printly/printly.dart';
 
 /// One discovered device, with its live connection state and the matching
 /// connect / cancel / disconnect affordance.
+///
+/// Devices seeded from the OS bonded list (`seenInScan == false`) are shown
+/// de-emphasised: they were paired previously but have not been observed in
+/// the current scan, so they may be out of range or powered off. Connecting
+/// to one typically times out rather than failing fast, which is confusing
+/// without this cue — a hardware tester hit exactly this and read it as a
+/// connect bug. The Connect button stays enabled regardless: the user may
+/// know the bonded printer is actually nearby and want to try it anyway.
 class DeviceTile extends StatelessWidget {
   const DeviceTile({
     required this.device,
@@ -31,66 +39,70 @@ class DeviceTile extends StatelessWidget {
             state == ConnectionState.disconnecting ||
             state == ConnectionState.reconnecting;
         return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: <Widget>[
-                Icon(_iconFor(device.availableTransports)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        device.hasName ? device.name! : '(unnamed)',
-                        style: theme.textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(device.address, style: theme.textTheme.bodySmall),
-                      const SizedBox(height: 2),
-                      Text(
-                        <String>[
-                          _labelFor(device.availableTransports),
-                          if (device.rssi != null) '${device.rssi} dBm',
-                          if (device.isBonded) 'bonded',
-                          state.name,
-                        ].join(' · '),
-                        style: theme.textTheme.labelSmall,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (busy)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      if (state == ConnectionState.connecting ||
-                          state == ConnectionState.reconnecting) ...<Widget>[
-                        const SizedBox(width: 8),
-                        TextButton(
-                          onPressed: onDisconnect,
-                          child: const Text('Cancel'),
+          child: Opacity(
+            opacity: device.seenInScan ? 1 : 0.6,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: <Widget>[
+                  Icon(_iconFor(device.availableTransports)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          device.hasName ? device.name! : '(unnamed)',
+                          style: theme.textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(device.address, style: theme.textTheme.bodySmall),
+                        const SizedBox(height: 2),
+                        Text(
+                          <String>[
+                            _labelFor(device.availableTransports),
+                            if (device.rssi != null) '${device.rssi} dBm',
+                            if (device.isBonded) 'bonded',
+                            state.name,
+                            if (!device.seenInScan) 'not seen in this scan',
+                          ].join(' · '),
+                          style: theme.textTheme.labelSmall,
                         ),
                       ],
-                    ],
-                  )
-                else if (isActive || state == ConnectionState.connected)
-                  TextButton(
-                    onPressed: onDisconnect,
-                    child: const Text('Disconnect'),
-                  )
-                else
-                  FilledButton(
-                    onPressed: onConnect,
-                    child: const Text('Connect'),
+                    ),
                   ),
-              ],
+                  const SizedBox(width: 8),
+                  if (busy)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        if (state == ConnectionState.connecting ||
+                            state == ConnectionState.reconnecting) ...<Widget>[
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: onDisconnect,
+                            child: const Text('Cancel'),
+                          ),
+                        ],
+                      ],
+                    )
+                  else if (isActive || state == ConnectionState.connected)
+                    TextButton(
+                      onPressed: onDisconnect,
+                      child: const Text('Disconnect'),
+                    )
+                  else
+                    FilledButton(
+                      onPressed: onConnect,
+                      child: const Text('Connect'),
+                    ),
+                ],
+              ),
             ),
           ),
         );

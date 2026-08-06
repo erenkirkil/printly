@@ -67,6 +67,18 @@ class ScanViewModel extends ChangeNotifier {
         await Printly.instance.stopScan();
         _log.success('stopScan → ok');
       } else {
+        final PrintlyPermissionStatus current = await Printly.instance
+            .checkPermissions();
+        _log.success('checkPermissions → ${current.name}');
+        if (current != PrintlyPermissionStatus.granted) {
+          final PrintlyPermissionStatus asked = await Printly.instance
+              .requestPermissions();
+          _log.success('requestPermissions → ${asked.name}');
+          if (asked != PrintlyPermissionStatus.granted) {
+            _log.failure('scan aborted → permissions ${asked.name}');
+            return;
+          }
+        }
         Printly.instance.clearDevices();
         await Printly.instance.startScan();
         _log.success('startScan → ok');
@@ -85,10 +97,22 @@ class ScanViewModel extends ChangeNotifier {
       // would be a surprising side effect, and an app juggling several
       // printers may genuinely want to keep looking.
       await stopScanIfRunning();
+      _log.success(
+        'connect attempt → ${device.address} '
+        'transports=${device.availableTransports.map((ConnectionType t) => t.name).join('+')} '
+        'seenInScan=${device.seenInScan} bonded=${device.isBonded}'
+        '${device.rssi != null ? ' rssi=${device.rssi}' : ''}',
+      );
       await Printly.instance.connect(device);
-      _log.success('connect → ${device.address}');
+      _log.success(
+        'connect → ${device.address} '
+        'via ${Printly.instance.transportOf(device)?.name}',
+      );
     } catch (error) {
-      _log.failure('connect error → $error');
+      _log.failure(
+        'connect error → '
+        'via ${Printly.instance.transportOf(device)?.name ?? 'unresolved'} · $error',
+      );
     }
   }
 

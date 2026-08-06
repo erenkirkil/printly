@@ -39,6 +39,14 @@ class BluetoothViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> requestEnableBluetooth() async {
+    final bool shown = await Printly.instance.requestEnableBluetooth();
+    _log.success(
+      'requestEnableBluetooth → '
+      '${shown ? 'request shown' : 'no-op (already on / unavailable)'}',
+    );
+  }
+
   Future<void> openBluetoothSettings() async {
     final bool opened = await Printly.instance.openBluetoothSettings();
     _log.success('openBluetoothSettings → ${opened ? 'ok' : 'failed'}');
