@@ -15,6 +15,22 @@ import '../platform/printly_platform_interface.dart';
 /// can take longer on the first attempt while bonding completes.
 const Duration kDefaultConnectTimeout = Duration(seconds: 10);
 
+/// Message carried by [PrintlyErrorCode.disconnected] when a link closes
+/// before the connect attempt finished.
+///
+/// The bare wire reason ("disconnected") is accurate but tells a consumer
+/// nothing about what to try next, and this failure is genuinely ambiguous:
+/// the radio linked up and the peer closed it cleanly. Measured in the field
+/// on a POS handset whose Bluetooth stack accepted the GATT link and dropped
+/// it immediately, while the same printer connected fine from another device.
+/// Spelling the plausible causes out here saves every consumer the same
+/// investigation.
+const String _disconnectedDuringConnectMessage =
+    'the link closed before the connection was ready — the printer may '
+    'already be connected to another device, may have moved out of range, or '
+    'may not accept this transport (when the device advertises both, try '
+    'connect(transport:) with the other one)';
+
 /// Owns the per-device connection lifecycle and exposes broadcast streams
 /// for consumers.
 ///
@@ -377,7 +393,10 @@ class ConnectionController {
             code == PrintlyErrorCode.unknown
                 ? PrintlyErrorCode.connectFailed
                 : code,
-            event.failureReason ?? PrintlyErrorCode.connectFailed.wireName,
+            code == PrintlyErrorCode.disconnected
+                ? _disconnectedDuringConnectMessage
+                : event.failureReason ??
+                      PrintlyErrorCode.connectFailed.wireName,
           ),
         );
       case ConnectionState.disconnected:
@@ -385,7 +404,7 @@ class ConnectionController {
           key,
           const PrintlyConnectionException(
             PrintlyErrorCode.disconnected,
-            'disconnected before connect completed',
+            _disconnectedDuringConnectMessage,
           ),
         );
       case ConnectionState.connecting:

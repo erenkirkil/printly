@@ -407,6 +407,49 @@ void main() {
         await expectLater(future, throwsA(isA<Exception>()));
       },
     );
+
+    test('a disconnect during connect explains what to try next, on both the '
+        'plain-disconnected and the error-reason path', () async {
+      // The bare wire reason ("disconnected") is accurate but actionless.
+      // Both native paths must carry the guidance, since a POS stack that
+      // accepts the link and drops it reaches whichever one the platform
+      // happens to emit.
+      Future<void> attempt(ConnectionState state, String? reason) async {
+        final Future<void> future = controller.connect(deviceA);
+        await Future<void>.delayed(Duration.zero);
+        platform.emit(
+          PrintlyConnectionEvent(
+            device: deviceA,
+            state: state,
+            failureReason: reason,
+          ),
+        );
+        await expectLater(
+          future,
+          throwsA(
+            isA<PrintlyConnectionException>()
+                .having(
+                  (PrintlyConnectionException e) => e.code,
+                  'code',
+                  PrintlyErrorCode.disconnected,
+                )
+                .having(
+                  (PrintlyConnectionException e) => e.message,
+                  'message',
+                  allOf(
+                    contains('closed before the connection was ready'),
+                    contains('another device'),
+                    contains('transport'),
+                  ),
+                ),
+          ),
+        );
+        await controller.disconnect(device: deviceA);
+      }
+
+      await attempt(ConnectionState.disconnected, null);
+      await attempt(ConnectionState.error, 'disconnected');
+    });
   });
 
   group('resolveTransport (pure)', () {
