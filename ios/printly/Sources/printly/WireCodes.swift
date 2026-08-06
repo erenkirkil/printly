@@ -59,11 +59,14 @@ extension WireCodes {
         static let getPlatformVersion = "getPlatformVersion"
         static let getAndroidSdkInt = "getAndroidSdkInt"
         static let openBluetoothSettings = "openBluetoothSettings"
+        static let requestEnableBluetooth = "requestEnableBluetooth"
         static let startScan = "startScan"
         static let stopScan = "stopScan"
         static let connect = "connect"
         static let disconnect = "disconnect"
         static let write = "write"
+        static let isLocationServiceEnabled = "isLocationServiceEnabled"
+        static let openLocationSettings = "openLocationSettings"
     }
 
     /// Payload keys used in method arguments and event maps.
@@ -79,6 +82,7 @@ extension WireCodes {
         static let isBonded = "isBonded"
         static let state = "state"
         static let failureReason = "failureReason"
+        static let seenInScan = "seenInScan"
     }
 
     /// Machine-readable error strings — `PrintlyErrorCode.wireName` on the
@@ -101,6 +105,7 @@ extension WireCodes {
         static let networkNotSupported = "network_not_supported"
         static let classicRequiresMfi = "classic_requires_mfi"
         static let unsupportedPlatform = "unsupported_platform"
+        static let locationServicesDisabled = "location_services_disabled"
 
         // Not part of the shared PrintlyErrorCode vocabulary, but still
         // channel-crossing strings that Android emits with identical bytes.

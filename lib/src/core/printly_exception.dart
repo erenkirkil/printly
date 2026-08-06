@@ -61,6 +61,12 @@ enum PrintlyErrorCode {
   /// The operation is not implemented on this platform yet.
   unsupportedPlatform('unsupported_platform'),
 
+  /// Scanning was refused because the OS location service is off. Android
+  /// below API 31 returns no scan results at all in that state — the location
+  /// permission alone is not enough — so printly rejects the scan instead of
+  /// letting it look like an empty room.
+  locationServicesDisabled('location_services_disabled'),
+
   /// Anything the SDK could not classify. The original platform message is
   /// preserved in [PrintlyException.message].
   unknown('unknown');

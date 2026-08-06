@@ -38,7 +38,7 @@ internal class ClassicScanSession(
         if (receiver != null) return
 
         try {
-            adapter.bondedDevices?.forEach { onDevice(encode(it, null)) }
+            adapter.bondedDevices?.forEach { onDevice(encode(it, null, seenInScan = false)) }
         } catch (_: SecurityException) {
             // BLUETOOTH_CONNECT missing — skip bonded seed.
         }
@@ -86,7 +86,7 @@ internal class ClassicScanSession(
             BluetoothDevice.EXTRA_RSSI,
             Short.MIN_VALUE,
         ).takeIf { it != Short.MIN_VALUE }?.toInt()
-        if (device != null) onDevice(encode(device, rssi))
+        if (device != null) onDevice(encode(device, rssi, seenInScan = true))
     }
 
     @SuppressLint("MissingPermission")
@@ -111,7 +111,11 @@ internal class ClassicScanSession(
     }
 
     @SuppressLint("MissingPermission")
-    private fun encode(device: BluetoothDevice, rssi: Int?): Map<String, Any?> {
+    private fun encode(
+        device: BluetoothDevice,
+        rssi: Int?,
+        seenInScan: Boolean,
+    ): Map<String, Any?> {
         val name: String? = try { device.name } catch (_: SecurityException) { null }
         val bonded: Boolean = try {
             device.bondState == BluetoothDevice.BOND_BONDED
@@ -122,6 +126,7 @@ internal class ClassicScanSession(
             if (name != null) put(WireCodes.Keys.NAME, name)
             if (rssi != null) put(WireCodes.Keys.RSSI, rssi)
             put(WireCodes.Keys.IS_BONDED, bonded)
+            put(WireCodes.Keys.SEEN_IN_SCAN, seenInScan)
         }
     }
 }

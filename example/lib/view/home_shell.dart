@@ -75,7 +75,11 @@ class _HomeShellState extends State<HomeShell> {
         children: <Widget>[
           ListenableBuilder(
             listenable: _log,
-            builder: (BuildContext context, _) => StatusStrip(log: _log.last),
+            builder: (BuildContext context, _) => StatusStrip(
+              log: _log.last,
+              history: _log.entries,
+              onClear: _log.clear,
+            ),
           ),
           Expanded(
             child: IndexedStack(

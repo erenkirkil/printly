@@ -31,6 +31,12 @@ abstract final class WireProtocol {
   /// Opens the system Bluetooth settings (Android) or app settings (iOS).
   static const String mOpenBluetoothSettings = 'openBluetoothSettings';
 
+  /// Requests that the radio be turned on in place: Android's
+  /// `ACTION_REQUEST_ENABLE` system dialog, or iOS's power-alert
+  /// `CBCentralManager`. Returns whether the request was shown — the actual
+  /// enable/decline outcome must be observed on [adapterStateChannel].
+  static const String mRequestEnableBluetooth = 'requestEnableBluetooth';
+
   /// Starts a device scan for the transports in [keyTypes].
   static const String mStartScan = 'startScan';
 
@@ -45,6 +51,13 @@ abstract final class WireProtocol {
 
   /// Writes the bytes in [keyBytes] to the device in [keyDevice].
   static const String mWrite = 'write';
+
+  /// Whether the OS location service is enabled (Android below API 31 needs it
+  /// for scanning; `true` elsewhere).
+  static const String mIsLocationServiceEnabled = 'isLocationServiceEnabled';
+
+  /// Opens the system location settings page (Android only).
+  static const String mOpenLocationSettings = 'openLocationSettings';
 
   // Payload keys ---------------------------------------------------------
 
@@ -81,4 +94,8 @@ abstract final class WireProtocol {
   /// Failure-reason wire string in connection events (see
   /// `PrintlyErrorCode.wireName`).
   static const String keyFailureReason = 'failureReason';
+
+  /// Whether the device was actually observed during this scan (bool);
+  /// absent means true. Classic bonded seeding sends false.
+  static const String keySeenInScan = 'seenInScan';
 }

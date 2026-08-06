@@ -30,6 +30,30 @@ abstract final class TurkishCodePage {
   /// Byte emitted for runes the target code page cannot represent (`?`).
   static const int unmappable = 0x3F;
 
+  /// Readable ASCII fallbacks for runes outside Latin-1.
+  ///
+  /// Only the six Turkish letters that Latin-1 cannot represent plus the
+  /// typographic characters mobile keyboards insert automatically (smart
+  /// quotes, dashes, ellipsis) — the exact set measured to crash consumer
+  /// QR payloads in the field. `ç ö ü Ç Ö Ü` are *inside* Latin-1 and are
+  /// deliberately absent: they must pass through unchanged.
+  static const Map<int, String> _latin1Transliterations = <int, String>{
+    0x015F: 's', // ş
+    0x015E: 'S', // Ş
+    0x0131: 'i', // ı
+    0x0130: 'I', // İ
+    0x011F: 'g', // ğ
+    0x011E: 'G', // Ğ
+    0x2014: '-', // — em dash
+    0x2013: '-', // – en dash
+    0x201C: '"', // " left double quote
+    0x201D: '"', // " right double quote
+    0x201E: '"', // „ low double quote
+    0x2018: "'", // ' left single quote
+    0x2019: "'", // ' right single quote
+    0x2026: '...', // … ellipsis (note: grows the string)
+  };
+
   /// CP857 (IBM Turkish) high range, `0x80–0xFF` → Unicode code point.
   ///
   /// Bytes `0xD5`, `0xE7` and `0xF2` are undefined in CP857 and intentionally
@@ -267,6 +291,55 @@ abstract final class TurkishCodePage {
       }
     }
     return out.toBytes();
+  }
+
+  /// Returns [text] with every rune above `0xFF` made Latin-1 safe, so the
+  /// result can always be fed to `latin1.encode` (and therefore to
+  /// [PrintJob.qr]).
+  ///
+  /// With [transliterate] enabled (the default) runes with a readable ASCII
+  /// equivalent — the Turkish letters `ş Ş ı İ ğ Ğ` and common typographic
+  /// punctuation — are converted first; everything else above `0xFF` becomes
+  /// [replacement]. With [transliterate] disabled every rune above `0xFF`
+  /// becomes [replacement].
+  ///
+  /// Exists because the text path degrades gracefully (unmappable runes
+  /// print as `?`) while machine-readable payloads used to throw — turning
+  /// auto-corrected input like `"şalter"` into a runtime crash. Consumers
+  /// can call this explicitly, or let [PrintJob.qr] apply it via
+  /// `PrintlyUnmappable`.
+  ///
+  /// Note `…` expands to `...`, so byte-length checks must run *after* this
+  /// call. Throws [ArgumentError] when [replacement] is outside `0..0xFF`
+  /// (the result could then never be Latin-1 encodable).
+  static String toLatin1(
+    String text, {
+    bool transliterate = true,
+    int replacement = unmappable,
+  }) {
+    if (replacement < 0 || replacement > 0xFF) {
+      throw ArgumentError.value(
+        replacement,
+        'replacement',
+        'must be a Latin-1 code unit (0..0xFF)',
+      );
+    }
+    final StringBuffer out = StringBuffer();
+    for (final int rune in text.runes) {
+      if (rune <= 0xFF) {
+        out.writeCharCode(rune);
+        continue;
+      }
+      final String? mapped = transliterate
+          ? _latin1Transliterations[rune]
+          : null;
+      if (mapped != null) {
+        out.write(mapped);
+      } else {
+        out.writeCharCode(replacement);
+      }
+    }
+    return out.toString();
   }
 
   /// Builds the full Windows-1254 `byte → rune` map.

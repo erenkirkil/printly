@@ -1,3 +1,4 @@
+import 'dart:convert' show latin1;
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:printly/printly.dart';
@@ -359,6 +360,127 @@ void main() {
         ..text('A')
         ..feed(1);
       expect(j.build(), j.build());
+    });
+  });
+
+  group('PrintJob.qr sanitization', () {
+    // GS ( k <len> 0x31 0x50 0x30 <payload> — locate fn-180 payload start.
+    List<int> qrBytes(String data, {PrintlyUnmappable? unmappable}) =>
+        unmappable == null
+        ? job().qr(data).build()
+        : job().qr(data, unmappable: unmappable).build();
+
+    test('default still throws on non-Latin-1 (behaviour preserved)', () {
+      expect(() => job().qr('Ücret ₺250'), throwsArgumentError);
+      expect(() => job().qr('Kapı — arıza'), throwsArgumentError);
+    });
+
+    test('transliterate converts and prints instead of throwing', () {
+      final List<int> bytes = qrBytes(
+        'Bozuk “şalter”',
+        unmappable: PrintlyUnmappable.transliterate,
+      );
+      expect(_contains(bytes, latin1.encode('Bozuk "salter"')), isTrue);
+    });
+
+    test('replace substitutes without transliterating', () {
+      final List<int> bytes = qrBytes(
+        'ş—',
+        unmappable: PrintlyUnmappable.replace,
+      );
+      expect(_contains(bytes, latin1.encode('??')), isTrue);
+    });
+
+    test('Latin-1 payloads are byte-identical across policies', () {
+      expect(
+        qrBytes('Sıcaklık 45°C'.replaceAll('ı', 'i')),
+        qrBytes(
+          'Sıcaklık 45°C'.replaceAll('ı', 'i'),
+          unmappable: PrintlyUnmappable.transliterate,
+        ),
+      );
+    });
+
+    test('byte cap is checked after ellipsis expansion', () {
+      // 2952 chars + '…' → 2955 bytes after '…' becomes '...': must throw.
+      final String data = 'a' * 2952;
+      expect(
+        () => job().qr('$data…', unmappable: PrintlyUnmappable.transliterate),
+        throwsArgumentError,
+      );
+      // Same length without expansion stays within the 2953-byte cap.
+      expect(
+        () => job().qr('${data}b', unmappable: PrintlyUnmappable.transliterate),
+        returnsNormally,
+      );
+    });
+  });
+
+  group('PrintJob.barcode sanitization', () {
+    test('default still throws on out-of-charset input', () {
+      expect(() => job().barcode('Kapı—1'), throwsArgumentError);
+      expect(
+        () => job().barcode('abc', type: PrintlyBarcodeType.code39),
+        throwsArgumentError,
+      );
+    });
+
+    test('code128 transliterate converts Turkish letters and dashes', () {
+      final List<int> bytes = job()
+          .barcode('Kapı—1', unmappable: PrintlyUnmappable.transliterate)
+          .build();
+      // CODE128 payload goes on the wire {B-prefixed and length-prefixed.
+      expect(_contains(bytes, latin1.encode('{BKapi-1')), isTrue);
+    });
+
+    test('code128 replaces in-Latin-1 but out-of-ASCII chars too', () {
+      // ° (0xB0) survives toLatin1 but CODE128-B is ASCII-only.
+      final List<int> bytes = job()
+          .barcode('45°C', unmappable: PrintlyUnmappable.transliterate)
+          .build();
+      expect(_contains(bytes, latin1.encode('{B45?C')), isTrue);
+    });
+
+    test('code39 folds lowercase and uses dash as default replacement', () {
+      final List<int> bytes = job()
+          .barcode(
+            'kapı no.7',
+            type: PrintlyBarcodeType.code39,
+            unmappable: PrintlyUnmappable.transliterate,
+          )
+          .build();
+      // ı→i→I, lowercase folded, space and . kept: "KAPI NO.7".
+      expect(_contains(bytes, latin1.encode('KAPI NO.7')), isTrue);
+    });
+
+    test('rejects a replacement invalid for the symbology', () {
+      expect(
+        () => job().barcode(
+          'ş1',
+          type: PrintlyBarcodeType.code39,
+          unmappable: PrintlyUnmappable.replace,
+          replacement: 0x3F, // '?' is not in the CODE39 charset
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('numeric symbologies never sanitize — invalid input still throws', () {
+      expect(
+        () => job().barcode(
+          '4006381333931x',
+          type: PrintlyBarcodeType.ean13,
+          unmappable: PrintlyUnmappable.transliterate,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('explicit {A selector bypasses the printable-ASCII gate', () {
+      // Code set A encodes control characters; printly must keep a
+      // caller-supplied selector payload as-is, as barcode() documents.
+      final List<int> bytes = job().barcode('{AAB\x1D12').build();
+      expect(bytes, isNotEmpty);
     });
   });
 }

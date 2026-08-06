@@ -99,6 +99,49 @@ class MethodChannelPrintly extends PrintlyPlatform {
   }
 
   @override
+  Future<bool> requestEnableBluetooth() async {
+    // Unlike the void-returning calls above, this needs to both unwrap a
+    // bool *and* map errors, so it cannot reuse [_mapErrors] (void-typed) —
+    // the try/catch is inlined instead of adding a second, bool-returning
+    // error-mapping helper for a single call site.
+    try {
+      final bool? shown = await methodChannel.invokeMethod<bool>(
+        WireProtocol.mRequestEnableBluetooth,
+      );
+      return shown ?? false;
+    } on PlatformException catch (error) {
+      throw _toPrintlyException(error, _ErrorDomain.scan);
+    }
+  }
+
+  @override
+  Future<bool> isLocationServiceEnabled() async {
+    // Same reasoning as [requestEnableBluetooth]: needs both a bool unwrap
+    // and error mapping, so it does not go through the void-typed
+    // [_mapErrors] helper.
+    try {
+      final bool? satisfied = await methodChannel.invokeMethod<bool>(
+        WireProtocol.mIsLocationServiceEnabled,
+      );
+      return satisfied ?? true;
+    } on PlatformException catch (error) {
+      throw _toPrintlyException(error, _ErrorDomain.scan);
+    }
+  }
+
+  @override
+  Future<bool> openLocationSettings() async {
+    try {
+      final bool? opened = await methodChannel.invokeMethod<bool>(
+        WireProtocol.mOpenLocationSettings,
+      );
+      return opened ?? false;
+    } on PlatformException catch (error) {
+      throw _toPrintlyException(error, _ErrorDomain.scan);
+    }
+  }
+
+  @override
   Future<void> startScan({required Set<ConnectionType> types}) {
     return _mapErrors(_ErrorDomain.scan, () async {
       await methodChannel
@@ -128,30 +171,19 @@ class MethodChannelPrintly extends PrintlyPlatform {
 
   static PrintlyDevice? _decodeScanEvent(dynamic event) {
     if (event is! Map) return null;
-    final Object? address = event[WireProtocol.keyAddress];
-    final Object? typeCode = event[WireProtocol.keyType];
-    if (address is! String || typeCode is! int) return null;
-    return PrintlyDevice(
-      address: address,
-      type: ConnectionType.fromWireCode(typeCode),
-      name: event[WireProtocol.keyName] is String
-          ? event[WireProtocol.keyName] as String
-          : null,
-      rssi: event[WireProtocol.keyRssi] is int
-          ? event[WireProtocol.keyRssi] as int
-          : null,
-      isBonded: event[WireProtocol.keyIsBonded] is bool
-          ? event[WireProtocol.keyIsBonded] as bool
-          : false,
-    );
+    return PrintlyDevice.fromWireMap(event.cast<Object?, Object?>());
   }
 
   @override
-  Future<void> connect({required PrintlyDevice device, Duration? timeout}) {
+  Future<void> connect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+    Duration? timeout,
+  }) {
     return _mapErrors(_ErrorDomain.connection, () async {
       await methodChannel
           .invokeMethod<void>(WireProtocol.mConnect, <String, Object?>{
-            WireProtocol.keyDevice: device.toJson(),
+            WireProtocol.keyDevice: _deviceWireMap(device, transport),
             if (timeout != null)
               WireProtocol.keyTimeoutMs: timeout.inMilliseconds,
           });
@@ -159,11 +191,16 @@ class MethodChannelPrintly extends PrintlyPlatform {
   }
 
   @override
-  Future<void> disconnect({required PrintlyDevice device}) {
+  Future<void> disconnect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+  }) {
     return _mapErrors(_ErrorDomain.connection, () async {
       await methodChannel.invokeMethod<void>(
         WireProtocol.mDisconnect,
-        <String, Object?>{WireProtocol.keyDevice: device.toJson()},
+        <String, Object?>{
+          WireProtocol.keyDevice: _deviceWireMap(device, transport),
+        },
       );
     });
   }
@@ -171,18 +208,36 @@ class MethodChannelPrintly extends PrintlyPlatform {
   @override
   Future<void> write({
     required PrintlyDevice device,
+    required ConnectionType transport,
     required Uint8List bytes,
   }) {
     return _mapErrors(_ErrorDomain.write, () async {
-      await methodChannel.invokeMethod<void>(
-        WireProtocol.mWrite,
-        <String, Object?>{
-          WireProtocol.keyDevice: device.toJson(),
-          WireProtocol.keyBytes: bytes,
-        },
-      );
+      await methodChannel
+          .invokeMethod<void>(WireProtocol.mWrite, <String, Object?>{
+            WireProtocol.keyDevice: _deviceWireMap(device, transport),
+            WireProtocol.keyBytes: bytes,
+          });
     });
   }
+
+  /// Builds the native `keyDevice` payload for [device] over the given
+  /// [transport]. The native side requires a single concrete transport per
+  /// call (`keyType`) and keys its session by `type:address`, but
+  /// [PrintlyDevice.availableTransports] may list more than one for a
+  /// dual-mode radio — so [transport] must be the *same* value across the
+  /// [connect]/[disconnect]/[write] calls for one session. Passing a
+  /// different transport than the one used to open the session does not
+  /// error; it silently misses the session on the native side. The caller
+  /// (`ConnectionController`) is responsible for resolving and remembering
+  /// that one value; this helper only assembles the wire map.
+  static Map<String, Object?> _deviceWireMap(
+    PrintlyDevice device,
+    ConnectionType transport,
+  ) => <String, Object?>{
+    WireProtocol.keyAddress: device.address,
+    WireProtocol.keyType: transport.wireCode,
+    if (device.name != null) WireProtocol.keyName: device.name,
+  };
 
   @override
   Stream<PrintlyConnectionEvent> get connectionEvents {

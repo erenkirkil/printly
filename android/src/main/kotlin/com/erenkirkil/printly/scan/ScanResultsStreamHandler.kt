@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import com.erenkirkil.printly.util.LocationServices
 import com.erenkirkil.printly.util.PermissionChecker
 import com.erenkirkil.printly.util.WireCodes
 import io.flutter.plugin.common.EventChannel
@@ -56,6 +57,12 @@ internal class ScanResultsStreamHandler(
             ?: throw IllegalStateException(WireCodes.Reasons.BLUETOOTH_UNAVAILABLE)
         if (!PermissionChecker.hasScan(appContext)) {
             throw SecurityException("bluetooth_scan_denied")
+        }
+        // Below API 31 a scan with the location service off returns nothing at
+        // all and reports no error — reject instead of spinning for the whole
+        // timeout and looking like an empty room.
+        if (!LocationServices.isSatisfied(appContext)) {
+            throw IllegalStateException(WireCodes.Reasons.LOCATION_SERVICES_DISABLED)
         }
         // With the adapter off the BLE scanner is null and Classic discovery
         // no-ops, so the scan would "succeed" and spin silently for the whole

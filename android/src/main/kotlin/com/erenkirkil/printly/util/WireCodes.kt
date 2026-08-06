@@ -42,11 +42,14 @@ internal object WireCodes {
         const val GET_PLATFORM_VERSION = "getPlatformVersion"
         const val GET_ANDROID_SDK_INT = "getAndroidSdkInt"
         const val OPEN_BLUETOOTH_SETTINGS = "openBluetoothSettings"
+        const val REQUEST_ENABLE_BLUETOOTH = "requestEnableBluetooth"
         const val START_SCAN = "startScan"
         const val STOP_SCAN = "stopScan"
         const val CONNECT = "connect"
         const val DISCONNECT = "disconnect"
         const val WRITE = "write"
+        const val IS_LOCATION_SERVICE_ENABLED = "isLocationServiceEnabled"
+        const val OPEN_LOCATION_SETTINGS = "openLocationSettings"
     }
 
     /** Payload map keys — mirrors `WireProtocol.key*` constants. */
@@ -62,6 +65,7 @@ internal object WireCodes {
         const val IS_BONDED = "isBonded"
         const val STATE = "state"
         const val FAILURE_REASON = "failureReason"
+        const val SEEN_IN_SCAN = "seenInScan"
     }
 
     /**
@@ -84,5 +88,6 @@ internal object WireCodes {
         const val WRITE_FAILED = "write_failed"
         const val NETWORK_NOT_SUPPORTED = "network_not_supported"
         const val UNSUPPORTED_PLATFORM = "unsupported_platform"
+        const val LOCATION_SERVICES_DISABLED = "location_services_disabled"
     }
 }

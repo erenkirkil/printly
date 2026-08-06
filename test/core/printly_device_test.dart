@@ -3,16 +3,16 @@ import 'package:printly/printly.dart';
 
 void main() {
   group('PrintlyDevice equality', () {
-    test('ignores rssi, name, and isBonded', () {
-      const PrintlyDevice a = PrintlyDevice(
+    test('ignores rssi, name, isBonded, and availableTransports', () {
+      final PrintlyDevice a = PrintlyDevice(
         address: 'AA:BB:CC:DD:EE:FF',
-        type: ConnectionType.ble,
+        availableTransports: <ConnectionType>{ConnectionType.ble},
         name: 'Printer-A',
         rssi: -50,
       );
-      const PrintlyDevice b = PrintlyDevice(
+      final PrintlyDevice b = PrintlyDevice(
         address: 'AA:BB:CC:DD:EE:FF',
-        type: ConnectionType.ble,
+        availableTransports: <ConnectionType>{ConnectionType.classic},
         name: 'Printer-B',
         rssi: -70,
         isBonded: true,
@@ -21,26 +21,30 @@ void main() {
       expect(a.hashCode, b.hashCode);
     });
 
-    test('distinguishes same address across transports', () {
-      const PrintlyDevice classic = PrintlyDevice(
+    test('distinguishes different addresses', () {
+      final PrintlyDevice a = PrintlyDevice(
         address: 'AA:BB:CC:DD:EE:FF',
-        type: ConnectionType.classic,
+        availableTransports: <ConnectionType>{ConnectionType.classic},
       );
-      const PrintlyDevice ble = PrintlyDevice(
-        address: 'AA:BB:CC:DD:EE:FF',
-        type: ConnectionType.ble,
+      final PrintlyDevice b = PrintlyDevice(
+        address: '11:22:33:44:55:66',
+        availableTransports: <ConnectionType>{ConnectionType.classic},
       );
-      expect(classic == ble, isFalse);
+      expect(a == b, isFalse);
     });
-  });
 
-  group('PrintlyDevice.dedupKey', () {
-    test('combines type and address', () {
-      const PrintlyDevice device = PrintlyDevice(
-        address: 'AA:BB:CC:DD:EE:FF',
-        type: ConnectionType.ble,
+    test('dedupKey is the bare address — Classic and BLE ads merge', () {
+      final PrintlyDevice classic = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.classic},
       );
-      expect(device.dedupKey, 'ble:AA:BB:CC:DD:EE:FF');
+      final PrintlyDevice ble = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.ble},
+      );
+      expect(classic.dedupKey, 'AA:BB');
+      expect(classic, equals(ble));
+      expect(classic.hashCode, ble.hashCode);
     });
   });
 
@@ -51,7 +55,9 @@ void main() {
         port: 9100,
       );
       expect(device.address, '192.168.1.50:9100');
-      expect(device.type, ConnectionType.network);
+      expect(device.availableTransports, <ConnectionType>{
+        ConnectionType.network,
+      });
     });
 
     test('defaults to port 9100', () {
@@ -62,9 +68,9 @@ void main() {
 
   group('PrintlyDevice.copyWith', () {
     test('refreshes rssi without changing identity', () {
-      const PrintlyDevice original = PrintlyDevice(
+      final PrintlyDevice original = PrintlyDevice(
         address: 'AA:BB:CC:DD:EE:FF',
-        type: ConnectionType.ble,
+        availableTransports: <ConnectionType>{ConnectionType.ble},
         rssi: -50,
       );
       final PrintlyDevice updated = original.copyWith(rssi: -40);
@@ -73,9 +79,9 @@ void main() {
     });
 
     test('keeps existing fields when arguments are null', () {
-      const PrintlyDevice original = PrintlyDevice(
+      final PrintlyDevice original = PrintlyDevice(
         address: 'AA:BB:CC:DD:EE:FF',
-        type: ConnectionType.classic,
+        availableTransports: <ConnectionType>{ConnectionType.classic},
         name: 'Cashier',
         rssi: -60,
         isBonded: true,
@@ -84,23 +90,106 @@ void main() {
       expect(same.name, 'Cashier');
       expect(same.rssi, -60);
       expect(same.isBonded, isTrue);
+      expect(same.availableTransports, original.availableTransports);
+    });
+
+    test('can replace availableTransports', () {
+      final PrintlyDevice original = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.classic},
+      );
+      final PrintlyDevice updated = original.copyWith(
+        availableTransports: <ConnectionType>{ConnectionType.ble},
+      );
+      expect(updated.availableTransports, <ConnectionType>{ConnectionType.ble});
+    });
+  });
+
+  group('PrintlyDevice.mergeWith', () {
+    test('mergeWith unions transports and ORs the flags', () {
+      final PrintlyDevice seed = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.classic},
+        isBonded: true,
+        seenInScan: false,
+      );
+      final PrintlyDevice ad = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.ble},
+        name: 'PTP-II',
+        rssi: -60,
+      );
+      final PrintlyDevice merged = seed.mergeWith(ad);
+      expect(merged.availableTransports, <ConnectionType>{
+        ConnectionType.classic,
+        ConnectionType.ble,
+      });
+      expect(merged.isBonded, isTrue);
+      expect(merged.seenInScan, isTrue);
+      expect(merged.name, 'PTP-II');
+      expect(merged.rssi, -60);
+    });
+
+    test('prefers the existing name/rssi when the newer ad omits them', () {
+      final PrintlyDevice seed = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.ble},
+        name: 'PTP-II',
+        rssi: -55,
+      );
+      final PrintlyDevice ad = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.ble},
+      );
+      final PrintlyDevice merged = seed.mergeWith(ad);
+      expect(merged.name, 'PTP-II');
+      expect(merged.rssi, -55);
+    });
+
+    test('mergeWith keeps a real name over a blank advertised one', () {
+      final PrintlyDevice named = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.classic},
+        name: 'PTP-II',
+      );
+      final PrintlyDevice blankAd = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{ConnectionType.ble},
+        name: '  ',
+      );
+      expect(named.mergeWith(blankAd).name, 'PTP-II');
+      expect(named.mergeWith(blankAd).hasName, isTrue);
     });
   });
 
   group('PrintlyDevice JSON round-trip', () {
-    test('preserves address, type, and name', () {
-      const PrintlyDevice original = PrintlyDevice(
-        address: 'AA:BB:CC:DD:EE:FF',
-        type: ConnectionType.ble,
-        name: 'Cashier',
-        rssi: -55,
-        isBonded: true,
+    test('fromJson reads the legacy single-type persisted format', () {
+      final PrintlyDevice? migrated = PrintlyDevice.fromJson(<String, Object?>{
+        'address': 'AA:BB',
+        'type': ConnectionType.classic.wireCode,
+        'name': 'PTP-II',
+      });
+      expect(migrated, isNotNull);
+      expect(migrated!.availableTransports, <ConnectionType>{
+        ConnectionType.classic,
+      });
+      expect(migrated.name, 'PTP-II');
+    });
+
+    test('toJson/fromJson round-trips the new transports format', () {
+      final PrintlyDevice d = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{
+          ConnectionType.classic,
+          ConnectionType.ble,
+        },
+        name: 'PTP-II',
       );
-      final PrintlyDevice? restored = PrintlyDevice.fromJson(original.toJson());
-      expect(restored, isNotNull);
-      expect(restored!.address, original.address);
-      expect(restored.type, original.type);
-      expect(restored.name, original.name);
+      final PrintlyDevice? back = PrintlyDevice.fromJson(d.toJson());
+      expect(back, isNotNull);
+      expect(back!.availableTransports, d.availableTransports);
+      expect(back.name, d.name);
+      expect(back.address, d.address);
     });
 
     test('fromJson returns null for malformed payloads', () {
@@ -115,6 +204,79 @@ void main() {
           'type': 'ble',
         }),
         isNull,
+      );
+      expect(
+        PrintlyDevice.fromJson(<String, Object?>{
+          'address': 'AA:BB',
+          'transports': 'not-a-list',
+        }),
+        isNull,
+      );
+    });
+  });
+
+  group('PrintlyDevice.fromWireMap', () {
+    test('defaults seenInScan to true and wraps the single type', () {
+      final PrintlyDevice? d = PrintlyDevice.fromWireMap(<Object?, Object?>{
+        'address': 'AA:BB',
+        'type': ConnectionType.ble.wireCode,
+        'rssi': -55,
+      });
+      expect(d, isNotNull);
+      expect(d!.seenInScan, isTrue);
+      expect(d.availableTransports, <ConnectionType>{ConnectionType.ble});
+      expect(d.rssi, -55);
+
+      final PrintlyDevice? seeded =
+          PrintlyDevice.fromWireMap(<Object?, Object?>{
+            'address': 'AA:BB',
+            'type': ConnectionType.classic.wireCode,
+            'seenInScan': false,
+          });
+      expect(seeded, isNotNull);
+      expect(seeded!.seenInScan, isFalse);
+    });
+
+    test('decodes name, isBonded and returns null for malformed maps', () {
+      final PrintlyDevice? d = PrintlyDevice.fromWireMap(<Object?, Object?>{
+        'address': 'AA:BB:CC:DD:EE:FF',
+        'type': 1,
+        'name': 'Printer',
+        'isBonded': true,
+      });
+      expect(d, isNotNull);
+      expect(d!.name, 'Printer');
+      expect(d.isBonded, isTrue);
+
+      expect(PrintlyDevice.fromWireMap(<Object?, Object?>{'type': 0}), isNull);
+      expect(
+        PrintlyDevice.fromWireMap(<Object?, Object?>{'address': 'AA:BB'}),
+        isNull,
+      );
+    });
+  });
+
+  group('PrintlyDevice.hasName', () {
+    test('rejects null and whitespace-only names', () {
+      PrintlyDevice make(String? n) => PrintlyDevice(
+        address: 'A',
+        name: n,
+        availableTransports: <ConnectionType>{ConnectionType.ble},
+      );
+      expect(make(null).hasName, isFalse);
+      expect(make('  ').hasName, isFalse);
+      expect(make('PTP-II').hasName, isTrue);
+    });
+  });
+
+  group('PrintlyDevice construction', () {
+    test('asserts availableTransports is non-empty', () {
+      expect(
+        () => PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: const <ConnectionType>{},
+        ),
+        throwsA(isA<AssertionError>()),
       );
     });
   });

@@ -9,6 +9,8 @@ import 'bluetooth/bluetooth_manager.dart';
 import 'bluetooth/connection_controller.dart';
 import 'bluetooth/last_device_store.dart';
 import 'bluetooth/scan_controller.dart';
+import 'bluetooth/scan_session.dart';
+import 'core/bluetooth_permission_set.dart';
 import 'core/connection_state.dart';
 import 'core/connection_type.dart';
 import 'core/printly_device.dart';
@@ -43,6 +45,17 @@ class Printly {
   final BluetoothManager _bluetooth = BluetoothManager();
   final ScanController _scan = ScanController();
   final ConnectionController _connection = ConnectionController();
+
+  /// Ref-count registry for every [PrintlyScanSession] created through
+  /// [newScanSession], scoped to this facade instance (and therefore to
+  /// [_scan]) instead of being process-wide — see [ScanSessionRegistry].
+  final ScanSessionRegistry _scanSessionRegistry = ScanSessionRegistry();
+
+  /// Timeout applied to [startScan] calls that do not pass their own
+  /// [Duration]. Starts at [kDefaultScanTimeout]; set it once per app
+  /// (e.g. at startup) instead of repeating a custom timeout at every
+  /// [startScan] call site.
+  Duration defaultScanTimeout = kDefaultScanTimeout;
 
   Future<LastDeviceStore>? _storeFuture;
   LastDeviceStore? _cachedStore;
@@ -115,6 +128,10 @@ class Printly {
   /// iOS this also triggers the system Bluetooth permission prompt if the
   /// app has not yet been authorised and
   /// `NSBluetoothAlwaysUsageDescription` is present in the Info.plist.
+  ///
+  /// On Android this stream reports the radio alone. Missing runtime
+  /// permissions are **not** folded in (they were before 0.2.0, and froze
+  /// the stream at `unauthorized`) — check them with [checkPermissions].
   Stream<BluetoothAdapterState> get adapterState => _bluetooth.stream;
 
   /// Most recently observed [BluetoothAdapterState].
@@ -130,6 +147,32 @@ class Printly {
   /// least one active subscriber, this getter returns `false` until the
   /// first event arrives.
   bool get isBluetoothAvailable => _bluetooth.isBluetoothAvailable;
+
+  Future<List<ph.Permission>> _requiredPermissions() async {
+    if (!Platform.isAndroid) {
+      return requiredBluetoothPermissions(isAndroid: false, sdkInt: 0);
+    }
+    final int sdkInt = await PrintlyPlatform.instance.getAndroidSdkInt();
+    return requiredBluetoothPermissions(isAndroid: true, sdkInt: sdkInt);
+  }
+
+  /// Returns the current permission status **without prompting the user**.
+  ///
+  /// Evaluates exactly the same permission set as [requestPermissions]
+  /// (chosen by platform and Android API level) and aggregates to the worst
+  /// status. Use it to gate UI before deciding whether to show a rationale
+  /// or call [requestPermissions] — calling this can never pop a system
+  /// dialog. On iOS the status is read from
+  /// `CBCentralManager.authorization` (a class property), so no central
+  /// manager is created and the system Bluetooth prompt is not triggered.
+  Future<PrintlyPermissionStatus> checkPermissions() async {
+    final List<ph.Permission> required = await _requiredPermissions();
+    final List<PrintlyPermissionStatus> statuses = <PrintlyPermissionStatus>[];
+    for (final ph.Permission permission in required) {
+      statuses.add(_toPrintlyStatus(await permission.status));
+    }
+    return _aggregateStatus(statuses);
+  }
 
   /// Requests the runtime permissions required to use Bluetooth on the
   /// current platform.
@@ -147,22 +190,7 @@ class Printly {
   /// (e.g. if one is `permanentlyDenied` the overall result is
   /// `permanentlyDenied`).
   Future<PrintlyPermissionStatus> requestPermissions() async {
-    final List<ph.Permission> required;
-    if (Platform.isAndroid) {
-      final int sdkInt = await PrintlyPlatform.instance.getAndroidSdkInt();
-      required = sdkInt >= 31
-          ? <ph.Permission>[
-              ph.Permission.bluetoothScan,
-              ph.Permission.bluetoothConnect,
-            ]
-          : <ph.Permission>[
-              ph.Permission.bluetooth,
-              ph.Permission.locationWhenInUse,
-            ];
-    } else {
-      required = <ph.Permission>[ph.Permission.bluetooth];
-    }
-
+    final List<ph.Permission> required = await _requiredPermissions();
     final Map<ph.Permission, ph.PermissionStatus> results = await required
         .request();
     return _aggregateStatus(results.values.map(_toPrintlyStatus));
@@ -172,9 +200,72 @@ class Printly {
   ///
   /// On Android this uses `Settings.ACTION_BLUETOOTH_SETTINGS`. iOS offers
   /// no public deep link to the Bluetooth pane, so the app's own settings
-  /// page is opened instead.
+  /// page is opened instead — **this cannot turn the radio on**. If the
+  /// radio itself is off, use [requestEnableBluetooth] instead.
   Future<bool> openBluetoothSettings() {
     return PrintlyPlatform.instance.openBluetoothSettings();
+  }
+
+  /// Asks the user to turn Bluetooth on, in place, without leaving the app.
+  ///
+  /// On Android this shows the system `ACTION_REQUEST_ENABLE` dialog over
+  /// the current activity — the app is never backgrounded. On Android 12+
+  /// (API 31+) showing that dialog itself requires the `BLUETOOTH_CONNECT`
+  /// runtime permission; when it is missing this rejects with a
+  /// [PrintlyPermissionException] instead of silently doing nothing (call
+  /// [requestPermissions] first, or check [checkPermissions]).
+  ///
+  /// On iOS there is no programmatic way to toggle the radio, and
+  /// [openBluetoothSettings] cannot reach the system Bluetooth pane — Apple
+  /// only exposes `App-Prefs:Bluetooth`, a private URL scheme that risks App
+  /// Store rejection under guideline 2.5.1. Instead, this creates a
+  /// short-lived `CBCentralManager` with the `CBCentralManagerOptionShowPowerAlertKey`
+  /// option, which is Apple's one sanctioned "Bluetooth is off" system
+  /// alert; that alert's own "Settings" button legitimately deep-links to
+  /// the system Bluetooth pane, something this SDK cannot do on its own.
+  ///
+  /// **This call does not wait for the radio to actually turn on** — it
+  /// only reports whether the system request was shown. Returns `false` as
+  /// a no-op when Bluetooth is already on. Watch [adapterState] for the
+  /// real outcome (the user may dismiss the prompt without enabling it).
+  /// On iOS, `true` means the request was issued: the system may suppress
+  /// the alert when the radio is already on (unknowable without instantiating
+  /// a manager), and a never-authorized app gets the permission prompt instead.
+  Future<bool> requestEnableBluetooth() {
+    return PrintlyPlatform.instance.requestEnableBluetooth();
+  }
+
+  /// Whether the OS location service currently gates Bluetooth scanning on
+  /// this device.
+  ///
+  /// This is **not** the same thing as the location *permission*. On Android
+  /// below API 31, both Classic inquiry and BLE scanning silently return no
+  /// results — with no error from the platform — when the location
+  /// *service* is off, even if the location permission was granted. A scan
+  /// in that state looks exactly like an empty room. [startScan] checks this
+  /// itself and rejects with [PrintlyErrorCode.locationServicesDisabled]
+  /// instead of scanning blind, so most callers do not need to call this
+  /// directly — it is exposed for apps that want to check and route the user
+  /// proactively, e.g. before showing a "scan" button.
+  ///
+  /// From API 31, printly declares `BLUETOOTH_SCAN` with the
+  /// `neverForLocation` flag, which removes the dependency on the location
+  /// service entirely — this always returns `true` there. iOS never depends
+  /// on the location service for Bluetooth scanning either, so this always
+  /// returns `true` on iOS.
+  Future<bool> isLocationServiceEnabled() {
+    return PrintlyPlatform.instance.isLocationServiceEnabled();
+  }
+
+  /// Opens the system location settings page so the user can turn the
+  /// location service on.
+  ///
+  /// Android only, via `Settings.ACTION_LOCATION_SOURCE_SETTINGS`. Returns
+  /// `false` as a no-op on iOS — this SDK does not touch CoreLocation, since
+  /// creating a location manager would raise a permission question printly
+  /// has no business asking.
+  Future<bool> openLocationSettings() {
+    return PrintlyPlatform.instance.openLocationSettings();
   }
 
   /// Opens this application's system settings page so the user can review
@@ -182,23 +273,48 @@ class Printly {
   /// [ph.openAppSettings].
   Future<bool> openAppSettings() => ph.openAppSettings();
 
-  /// Starts a device scan across the requested transport [types]. Defaults to
-  /// scanning both Bluetooth Classic and BLE for [kDefaultScanTimeout]; the
-  /// scan auto-stops when the timeout elapses.
+  /// Starts a device scan across the requested transport [types]. [timeout]
+  /// defaults to [defaultScanTimeout] ([kDefaultScanTimeout] unless
+  /// overridden); the scan auto-stops when it elapses. [types] defaults to
+  /// the platform-appropriate set (`{classic, ble}` on Android, `{ble}` on
+  /// iOS — see `ScanController.defaultScanTypesForPlatform`).
+  ///
+  /// When [includeBonded] is `false`, Classic bonded-cache seeds are
+  /// excluded from [devicesStream] until they are actually seen by an
+  /// inquiry — see [ScanController.startScan] for the full semantics.
+  ///
+  /// [strategy] defaults to [ScanStrategy.parallel]. Pass
+  /// [ScanStrategy.classicFirst] to scan Classic first on Android and only
+  /// fall back to a single BLE round when nothing named answered — see
+  /// [ScanStrategy.classicFirst] for the full contract, including how it
+  /// interacts with an explicit [types].
   ///
   /// Safe to call repeatedly — concurrent calls share a single native scan
   /// and the same in-flight future, so duplicate button taps cannot start
   /// parallel scans.
   Future<void> startScan({
-    Duration timeout = kDefaultScanTimeout,
-    Set<ConnectionType> types = kDefaultScanTypes,
-  }) => _scan.startScan(timeout: timeout, types: types);
+    Duration? timeout,
+    Set<ConnectionType>? types,
+    bool includeBonded = true,
+    ScanStrategy strategy = ScanStrategy.parallel,
+  }) => _scan.startScan(
+    timeout: timeout ?? defaultScanTimeout,
+    types: types,
+    includeBonded: includeBonded,
+    strategy: strategy,
+  );
 
   /// Stops any in-progress scan. A no-op when no scan is running.
+  ///
+  /// Shares the same native scan as every [PrintlyScanSession] created via
+  /// [newScanSession]: this also ends the scan for any active sessions
+  /// (their `isScanning` observes `false`), regardless of whether the scan
+  /// was originally started here or through a session.
   Future<void> stopScan() => _scan.stopScan();
 
-  /// Broadcast stream of discovered devices, deduplicated by transport +
-  /// address and emitted as an immutable list on each change.
+  /// Broadcast stream of discovered devices, deduplicated by address (Classic
+  /// and BLE sightings of one radio merge into a single record) and emitted as
+  /// an immutable list on each change.
   Stream<List<PrintlyDevice>> get devicesStream => _scan.devicesStream;
 
   /// Broadcast stream signalling whether a scan is currently running.
@@ -219,8 +335,48 @@ class Printly {
   /// Clears the accumulated device list without stopping an active scan.
   void clearDevices() => _scan.clearDevices();
 
+  /// Creates a new screen-scoped [PrintlyScanSession].
+  ///
+  /// Unlike [devicesStream]/[isScanningStream] — process-lifetime streams
+  /// that replay their last value into every new subscriber — a session
+  /// seeds `devices`/`isScanning` empty/`false` and only starts forwarding
+  /// controller events once its own `start()` is called. See
+  /// [PrintlyScanSession] for the three field bugs this avoids. Create one
+  /// per screen (e.g. in `initState`) and call `dispose()` on it (e.g. in
+  /// `dispose`); an in-flight session's `start()` without an explicit
+  /// `timeout` uses [defaultScanTimeout] at the time `start()` runs, not at
+  /// the time this method was called.
+  ///
+  /// Sessions and this facade's own [startScan]/[stopScan] share one native
+  /// scan — there is no per-session native scan. That has two consequences
+  /// worth knowing: [stopScan] ends every active session's scan too, and an
+  /// undisposed active session keeps this facade's session registry
+  /// non-empty, which blocks the last-session auto-stop that would
+  /// otherwise fire when every session using it has stopped — always
+  /// `dispose()` a session (e.g. in your widget's `dispose()`), not just
+  /// `stop()` it, once you are done with it.
+  PrintlyScanSession newScanSession() => createScanSession(
+    controller: _scan,
+    registry: _scanSessionRegistry,
+    resolveDefaultTimeout: () => defaultScanTimeout,
+  );
+
   /// Opens a link to [device]. Idempotent for duplicate taps and serialises
   /// switching between two devices (disconnect current, then connect new).
+  ///
+  /// [transport] picks the [ConnectionType] to use when [device] advertises
+  /// more than one (a dual-mode Classic + BLE radio). When omitted, the
+  /// default preference is platform-specific: on Android, Classic is chosen
+  /// when available — it is the field-proven, most reliable RFCOMM path for
+  /// dual-mode printers; on iOS, only BLE is ever chosen (Classic requires
+  /// MFi certification, which is out of scope). Pass
+  /// `transport: ConnectionType.ble` explicitly on Android to opt into BLE
+  /// for a dual-mode printer instead. See
+  /// `ConnectionController.resolveTransport` for the full rule, and
+  /// [transportOf] to read back what was actually chosen. Switching the
+  /// transport of an already-connected device requires passing an explicit,
+  /// different [transport] — connecting again with the same or no transport
+  /// while already connected is a no-op.
   ///
   /// Completes with a [PrintlyConnectionException] when the attempt fails
   /// (its [PrintlyException.code] distinguishes timeouts, refusals, and
@@ -235,11 +391,14 @@ class Printly {
   /// being established is a well-known cause of connection failures, and the
   /// scan is wasted battery once the printer has been found either way. Call
   /// [stopScan] before this in the ordinary single-printer case.
+  /// A duplicate call while an attempt is in flight returns the pending
+  /// future and ignores a differing explicit [transport].
   Future<void> connect(
     PrintlyDevice device, {
+    ConnectionType? transport,
     Duration timeout = kDefaultConnectTimeout,
   }) async {
-    if (device.type == ConnectionType.network) {
+    if (device.availableTransports.contains(ConnectionType.network)) {
       // Fail fast with a typed error instead of a native round-trip that
       // would reject with the same reason after a delay.
       throw const PrintlyUnsupportedException(
@@ -247,7 +406,7 @@ class Printly {
         'Network (Ethernet/WiFi) printing is not implemented yet.',
       );
     }
-    return _connection.connect(device, timeout: timeout);
+    return _connection.connect(device, transport: transport, timeout: timeout);
   }
 
   /// Closes the current link. When [device] is omitted, disconnects the
@@ -275,6 +434,13 @@ class Printly {
   String? lastFailureReasonOf(PrintlyDevice device) =>
       _connection.lastFailureReasonOf(device);
 
+  /// The [ConnectionType] [connect] chose (or was told to use) for [device]:
+  /// the active link's transport, or the last one used if [device] is
+  /// currently disconnected. `null` if [device] has never been attempted
+  /// this session.
+  ConnectionType? transportOf(PrintlyDevice device) =>
+      _connection.transportOf(device);
+
   /// Creates a new [PrintJob] for the given paper width.
   ///
   /// Loads (and caches) the ESC/POS capability profile, so the first call may
@@ -297,7 +463,26 @@ class Printly {
   /// or [PrintlyErrorCode.writeFailed]. On iOS printing ships in a later
   /// release and currently rejects with a [PrintlyUnsupportedException].
   Future<void> print(PrintlyDevice device, PrintJob job) {
-    return PrintlyPlatform.instance.write(device: device, bytes: job.build());
+    // The write must travel over the same transport the active (or last)
+    // connect() used — the native side keys the session by `type:address`.
+    // transportOf() is null only when this device was never connected
+    // through this controller; resolveTransport() re-derives the same
+    // choice connect() would have made so a write attempt still gets a
+    // sensible transport (and the native "not connected" error) instead of
+    // an unrelated crash.
+    final ConnectionType transport;
+    try {
+      transport =
+          _connection.transportOf(device) ??
+          ConnectionController.resolveTransport(device, isIOS: Platform.isIOS);
+    } catch (error, stackTrace) {
+      return Future<void>.error(error, stackTrace);
+    }
+    return PrintlyPlatform.instance.write(
+      device: device,
+      transport: transport,
+      bytes: job.build(),
+    );
   }
 
   /// Loads the last persisted device and auto-reconnect flag, caches them
@@ -369,7 +554,14 @@ class Printly {
     final PrintlyDevice? device = _cachedLastDevice;
     if (device == null) return;
     if (_connection.stateOf(device) == ConnectionState.connected) return;
-    unawaited(_connection.connect(device).catchError((_) {}));
+    // Reconnect passes the remembered transport so an explicit BLE choice on a
+    // dual-mode radio survives an adapter power-cycle instead of silently
+    // reverting to the platform default.
+    unawaited(
+      _connection
+          .connect(device, transport: _connection.transportOf(device))
+          .catchError((_) {}),
+    );
   }
 
   /// Maps `permission_handler`'s status into printly's own enum so the

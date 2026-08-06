@@ -104,6 +104,11 @@ final class ScanResultsStreamHandler: NSObject, FlutterStreamHandler {
             // BOND_BONDED; expose false so the Dart layer has a consistent
             // field to read.
             WireCodes.Keys.isBonded: false,
+            // Unlike Android's Classic bonded-cache seed, CoreBluetooth never
+            // synthesizes a discovery result from a stored pairing — every
+            // callback here is a genuine advertisement, so this is always
+            // true.
+            WireCodes.Keys.seenInScan: true,
         ]
         let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         if let name = peripheral.name ?? advertisedName {

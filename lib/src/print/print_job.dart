@@ -19,6 +19,7 @@ import 'printly_qr_error_level.dart';
 import 'printly_text_align.dart';
 import 'printly_text_size.dart';
 import 'printly_text_style.dart';
+import 'printly_unmappable.dart';
 import 'qr_sizing.dart';
 import 'turkish_code_page.dart';
 
@@ -110,6 +111,21 @@ class PrintJob {
   // larger cannot be encoded by any printer.
   static const int _maxQrBytes = 2953;
 
+  // Sanitization targets per symbology. CODE128 subset B covers printable
+  // ASCII (0x20-0x7E; 0x7F DEL is in the code set but not printable — a
+  // replacement no scanner app can display is useless, so it is excluded).
+  // CODE39 has its own narrow set. Numeric symbologies (EAN/UPC/ITF) and
+  // CODABAR are deliberately absent: substituting characters in a
+  // check-digit payload would print a scannable-but-wrong code.
+  static final Set<int> _code128Charset = <int>{
+    for (int c = 0x20; c <= 0x7E; c++) c,
+  };
+  static final Set<int> _code39Charset = <int>{
+    for (int c = 0x30; c <= 0x39; c++) c, // 0-9
+    for (int c = 0x41; c <= 0x5A; c++) c, // A-Z
+    0x2D, 0x2E, 0x24, 0x2F, 0x2B, 0x25, 0x20, // - . $ / + % space
+  };
+
   final Generator _generator;
   final PrintConfig _config;
   final List<int> _bytes = <int>[];
@@ -198,7 +214,21 @@ class PrintJob {
   /// [textPosition]. CODE128 payloads are automatically prefixed with the
   /// `{B` code set and literal `{` characters are escaped; a caller-supplied
   /// `{A`/`{B`/`{C` selector is kept as-is (with the remainder escaped).
-  /// Throws [ArgumentError] when [data] is not valid for [type].
+  ///
+  /// [unmappable] chooses what happens to characters the symbology cannot
+  /// encode. It only applies to [PrintlyBarcodeType.code128] (target:
+  /// printable ASCII, unless [data] starts with an explicit `{A`/`{B`/`{C`
+  /// code-set selector — that hands the caller manual control and the
+  /// printable-ASCII gate is skipped) and [PrintlyBarcodeType.code39] (its
+  /// narrow charset; lowercase is folded to uppercase first). Numeric
+  /// symbologies and CODABAR always validate strictly — substituting
+  /// characters in a check-digit payload would print a scannable-but-wrong
+  /// code.
+  /// [replacement] defaults per symbology (`?` for CODE128, `-` for CODE39)
+  /// and must itself be encodable, otherwise [ArgumentError].
+  /// [replacement] has no effect under [PrintlyUnmappable.throwError].
+  /// Throws [ArgumentError] when the (sanitized) [data] is not valid for
+  /// [type].
   PrintJob barcode(
     String data, {
     PrintlyBarcodeType type = PrintlyBarcodeType.code128,
@@ -207,8 +237,16 @@ class PrintJob {
     bool showText = true,
     PrintlyHriPosition textPosition = PrintlyHriPosition.below,
     PrintlyTextAlign align = PrintlyTextAlign.center,
+    PrintlyUnmappable unmappable = PrintlyUnmappable.throwError,
+    int? replacement,
   }) {
-    final Barcode bc = _buildBarcode(type, data);
+    final String sanitized = _sanitizeBarcode(
+      data,
+      type,
+      unmappable,
+      replacement,
+    );
+    final Barcode bc = _buildBarcode(type, sanitized);
     final BarcodeText hri = showText
         ? _toBarcodeText(textPosition)
         : BarcodeText.none;
@@ -234,23 +272,45 @@ class PrintJob {
   /// [maxModuleSize] to cap the physical size.
   ///
   /// [data] must be representable in Latin-1 (the encoding the printer stores
-  /// QR symbols in). Non-Latin-1 input — including the Turkish letters
-  /// `ş ı ğ İ` and any non-Latin script — throws [ArgumentError]. Encode such
-  /// payloads yourself and use [raw] if a printer-specific QR mode is required.
-  /// Payloads longer than 2953 bytes (the QR byte-mode maximum) also throw.
+  /// QR symbols in). What happens to runes outside Latin-1 — including the
+  /// Turkish letters `ş ı ğ İ` — is chosen by [unmappable]: the default
+  /// [PrintlyUnmappable.throwError] throws [ArgumentError] so silent data
+  /// loss in a scannable code stays opt-in;
+  /// [PrintlyUnmappable.transliterate] converts readable equivalents via
+  /// [TurkishCodePage.toLatin1] and substitutes the rest with [replacement];
+  /// [PrintlyUnmappable.replace] substitutes everything above `0xFF`.
+  /// [replacement] has no effect under [PrintlyUnmappable.throwError].
+  /// Payloads longer than 2953 bytes (the QR byte-mode maximum, measured
+  /// after sanitization — `…` expands to `...`) always throw.
   PrintJob qr(
     String data, {
     int? maxModuleSize,
     PrintlyQrErrorLevel errorLevel = PrintlyQrErrorLevel.medium,
     PrintlyTextAlign align = PrintlyTextAlign.center,
+    PrintlyUnmappable unmappable = PrintlyUnmappable.throwError,
+    int replacement = TurkishCodePage.unmappable,
   }) {
-    if (data.runes.any((int rune) => rune > 0xFF)) {
+    final String sanitized = switch (unmappable) {
+      PrintlyUnmappable.throwError => data,
+      PrintlyUnmappable.replace => TurkishCodePage.toLatin1(
+        data,
+        transliterate: false,
+        replacement: replacement,
+      ),
+      PrintlyUnmappable.transliterate => TurkishCodePage.toLatin1(
+        data,
+        replacement: replacement,
+      ),
+    };
+    if (sanitized.runes.any((int rune) => rune > 0xFF)) {
       throw ArgumentError(
         'Invalid QR payload: contains characters outside Latin-1 (e.g. the '
-        'Turkish letters ş/ı/ğ/İ). QR data must be Latin-1. Got: "$data"',
+        'Turkish letters ş/ı/ğ/İ). QR data must be Latin-1; pass '
+        'unmappable: PrintlyUnmappable.transliterate to sanitize instead. '
+        'Got: "$data"',
       );
     }
-    final Uint8List payload = Uint8List.fromList(latin1.encode(data));
+    final Uint8List payload = Uint8List.fromList(latin1.encode(sanitized));
     if (payload.length > _maxQrBytes) {
       throw ArgumentError(
         'QR payload is ${payload.length} bytes; the QR byte-mode maximum is '
@@ -258,7 +318,7 @@ class PrintJob {
       );
     }
     final int moduleSize = QrSizing.moduleSize(
-      data: data,
+      data: sanitized,
       errorLevel: errorLevel,
       paperDots: _config.paperWidth.dots,
       maxModuleSize: maxModuleSize,
@@ -467,6 +527,72 @@ class PrintJob {
     } on Exception catch (error) {
       throw ArgumentError('Invalid ${type.name} barcode payload: $error');
     }
+  }
+
+  /// Applies the [PrintlyUnmappable] policy for the symbologies where a
+  /// substitution cannot corrupt the payload semantics (CODE128, CODE39).
+  static String _sanitizeBarcode(
+    String data,
+    PrintlyBarcodeType type,
+    PrintlyUnmappable unmappable,
+    int? replacement,
+  ) {
+    final Set<int>? allowed = switch (type) {
+      PrintlyBarcodeType.code128 => _code128Charset,
+      PrintlyBarcodeType.code39 => _code39Charset,
+      _ => null,
+    };
+
+    if (unmappable == PrintlyUnmappable.throwError) {
+      // The wrapped library validates CODE39 and the numeric symbologies
+      // itself, but Barcode.code128 only checks length — a non-encodable
+      // rune would silently print a corrupt symbol. Enforce the documented
+      // ArgumentError contract here, against the same charset the
+      // sanitizer targets.
+      //
+      // A caller-supplied {A/{B/{C selector takes manual control of the
+      // code set (code set A legitimately encodes 0x00-0x1F), so the
+      // printable-ASCII contract below only guards the auto-{B path.
+      final bool hasSelector =
+          data.length >= 2 &&
+          data[0] == '{' &&
+          (data[1] == 'A' || data[1] == 'B' || data[1] == 'C');
+      if (type == PrintlyBarcodeType.code128 &&
+          !hasSelector &&
+          data.runes.any((int rune) => !_code128Charset.contains(rune))) {
+        throw ArgumentError(
+          'Invalid code128 barcode payload: contains characters outside '
+          'printable ASCII. Pass unmappable: PrintlyUnmappable.transliterate '
+          'to sanitize instead. Got: "$data"',
+        );
+      }
+      return data;
+    }
+
+    if (allowed == null) return data;
+    final int fallback =
+        replacement ??
+        (type == PrintlyBarcodeType.code39 ? 0x2D : TurkishCodePage.unmappable);
+    if (!allowed.contains(fallback)) {
+      throw ArgumentError.value(
+        fallback,
+        'replacement',
+        'not encodable in ${type.name}',
+      );
+    }
+    String result = TurkishCodePage.toLatin1(
+      data,
+      transliterate: unmappable == PrintlyUnmappable.transliterate,
+      replacement: fallback,
+    );
+    if (type == PrintlyBarcodeType.code39) {
+      result = result.toUpperCase();
+    }
+    final StringBuffer out = StringBuffer();
+    for (final int rune in result.runes) {
+      out.writeCharCode(allowed.contains(rune) ? rune : fallback);
+    }
+    return out.toString();
   }
 
   /// Builds the CODE128 wire payload: in code set B a literal `{` must be

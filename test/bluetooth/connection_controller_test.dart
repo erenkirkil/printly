@@ -14,6 +14,12 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   int disconnectCalls = 0;
   final List<PrintlyDevice> connectDevices = <PrintlyDevice>[];
   final List<PrintlyDevice> disconnectDevices = <PrintlyDevice>[];
+  final List<ConnectionType> connectTransports = <ConnectionType>[];
+  final List<ConnectionType> disconnectTransports = <ConnectionType>[];
+  // Combined, order-preserving log of every connect/disconnect call — used
+  // to assert the disconnect-then-connect ordering of a cross-transport
+  // switch, which the separate per-call lists above cannot express.
+  final List<String> callLog = <String>[];
   Completer<void>? connectCompleter;
   Object? connectError;
 
@@ -23,18 +29,26 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   @override
   Future<void> connect({
     required PrintlyDevice device,
+    required ConnectionType transport,
     Duration? timeout,
   }) async {
     connectCalls++;
     connectDevices.add(device);
+    connectTransports.add(transport);
+    callLog.add('connect:${transport.name}');
     if (connectCompleter != null) await connectCompleter!.future;
     if (connectError != null) throw connectError!;
   }
 
   @override
-  Future<void> disconnect({required PrintlyDevice device}) async {
+  Future<void> disconnect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+  }) async {
     disconnectCalls++;
     disconnectDevices.add(device);
+    disconnectTransports.add(transport);
+    callLog.add('disconnect:${transport.name}');
   }
 
   @override
@@ -53,16 +67,30 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   }
 }
 
-const PrintlyDevice deviceA = PrintlyDevice(
+final PrintlyDevice deviceA = PrintlyDevice(
   address: 'AA:AA',
-  type: ConnectionType.ble,
+  availableTransports: <ConnectionType>{ConnectionType.ble},
   name: 'A',
 );
-const PrintlyDevice deviceB = PrintlyDevice(
+final PrintlyDevice deviceB = PrintlyDevice(
   address: 'BB:BB',
-  type: ConnectionType.ble,
+  availableTransports: <ConnectionType>{ConnectionType.ble},
   name: 'B',
 );
+final PrintlyDevice deviceDualMode = PrintlyDevice(
+  address: 'CC:CC',
+  availableTransports: <ConnectionType>{
+    ConnectionType.classic,
+    ConnectionType.ble,
+  },
+  name: 'Dual',
+);
+final PrintlyDevice deviceClassicOnly = PrintlyDevice(
+  address: 'DD:DD',
+  availableTransports: <ConnectionType>{ConnectionType.classic},
+  name: 'ClassicOnly',
+);
+final PrintlyDevice deviceNetwork = PrintlyDevice.network(host: '10.0.0.5');
 
 void main() {
   late _FakePlatform platform;
@@ -88,7 +116,7 @@ void main() {
       platform.connectCompleter!.complete();
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -101,7 +129,7 @@ void main() {
       final Future<void> f = controller.connect(deviceA);
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -117,7 +145,7 @@ void main() {
       final Future<void> fa = controller.connect(deviceA);
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -128,7 +156,7 @@ void main() {
       final Future<void> fb = controller.connect(deviceB);
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceB,
           state: ConnectionState.connected,
         ),
@@ -142,7 +170,7 @@ void main() {
       final Future<void> f = controller.connect(deviceA);
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -174,13 +202,13 @@ void main() {
         expect(received, <ConnectionState>[ConnectionState.disconnected]);
 
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.connecting,
           ),
         );
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.connected,
           ),
@@ -203,14 +231,14 @@ void main() {
         final subscription = controller.activeDeviceStream.listen(devices.add);
 
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.connected,
           ),
         );
         await Future<void>.delayed(Duration.zero);
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.disconnected,
           ),
@@ -226,7 +254,7 @@ void main() {
       'error event surfaces the failureReason via lastFailureReasonOf',
       () async {
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.error,
             failureReason: 'socket timeout',
@@ -263,7 +291,7 @@ void main() {
       expect(done, isFalse);
 
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -276,7 +304,7 @@ void main() {
       final Future<void> future = controller.connect(deviceA);
       await Future<void>.delayed(Duration.zero);
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.error,
           failureReason: 'refused',
@@ -321,7 +349,7 @@ void main() {
 
       // The OLD link's terminal event lands after the new attempt started…
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.disconnected,
         ),
@@ -331,7 +359,7 @@ void main() {
       expect(controller.stateOf(deviceA), ConnectionState.connecting);
 
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.connected,
         ),
@@ -349,14 +377,14 @@ void main() {
 
       // Old link's terminal event (swallowed)…
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.disconnected,
         ),
       );
       // …then the NEW attempt genuinely fails with a disconnect.
       platform.emit(
-        const PrintlyConnectionEvent(
+        PrintlyConnectionEvent(
           device: deviceA,
           state: ConnectionState.disconnected,
         ),
@@ -371,12 +399,224 @@ void main() {
         final Future<void> future = controller.connect(deviceA);
         await Future<void>.delayed(Duration.zero);
         platform.emit(
-          const PrintlyConnectionEvent(
+          PrintlyConnectionEvent(
             device: deviceA,
             state: ConnectionState.disconnected,
           ),
         );
         await expectLater(future, throwsA(isA<Exception>()));
+      },
+    );
+
+    test('a disconnect during connect explains what to try next, on both the '
+        'plain-disconnected and the error-reason path', () async {
+      // The bare wire reason ("disconnected") is accurate but actionless.
+      // Both native paths must carry the guidance, since a POS stack that
+      // accepts the link and drops it reaches whichever one the platform
+      // happens to emit.
+      Future<void> attempt(ConnectionState state, String? reason) async {
+        final Future<void> future = controller.connect(deviceA);
+        await Future<void>.delayed(Duration.zero);
+        platform.emit(
+          PrintlyConnectionEvent(
+            device: deviceA,
+            state: state,
+            failureReason: reason,
+          ),
+        );
+        await expectLater(
+          future,
+          throwsA(
+            isA<PrintlyConnectionException>()
+                .having(
+                  (PrintlyConnectionException e) => e.code,
+                  'code',
+                  PrintlyErrorCode.disconnected,
+                )
+                .having(
+                  (PrintlyConnectionException e) => e.message,
+                  'message',
+                  allOf(
+                    contains('closed before the connection was ready'),
+                    contains('another device'),
+                    contains('transport'),
+                  ),
+                ),
+          ),
+        );
+        await controller.disconnect(device: deviceA);
+      }
+
+      await attempt(ConnectionState.disconnected, null);
+      await attempt(ConnectionState.error, 'disconnected');
+    });
+  });
+
+  group('resolveTransport (pure)', () {
+    test('Android dual-mode device resolves to classic (RFCOMM is the '
+        'field-proven path)', () {
+      expect(
+        ConnectionController.resolveTransport(deviceDualMode, isIOS: false),
+        ConnectionType.classic,
+      );
+    });
+
+    test('iOS dual-mode device resolves to ble', () {
+      expect(
+        ConnectionController.resolveTransport(deviceDualMode, isIOS: true),
+        ConnectionType.ble,
+      );
+    });
+
+    test(
+      'explicit transport not in availableTransports throws ArgumentError',
+      () {
+        expect(
+          () => ConnectionController.resolveTransport(
+            deviceA, // ble-only
+            isIOS: false,
+            explicit: ConnectionType.classic,
+          ),
+          throwsArgumentError,
+        );
+      },
+    );
+
+    test('iOS classic-only device throws PrintlyUnsupportedException '
+        '(classicRequiresMfi)', () {
+      expect(
+        () => ConnectionController.resolveTransport(
+          deviceClassicOnly,
+          isIOS: true,
+        ),
+        throwsA(
+          isA<PrintlyUnsupportedException>().having(
+            (PrintlyUnsupportedException e) => e.code,
+            'code',
+            PrintlyErrorCode.classicRequiresMfi,
+          ),
+        ),
+      );
+    });
+
+    test('explicit valid transport wins over the default preference', () {
+      expect(
+        ConnectionController.resolveTransport(
+          deviceDualMode,
+          isIOS: false,
+          explicit: ConnectionType.ble,
+        ),
+        ConnectionType.ble,
+      );
+    });
+
+    test('network transport in availableTransports always wins', () {
+      expect(
+        ConnectionController.resolveTransport(deviceNetwork, isIOS: false),
+        ConnectionType.network,
+      );
+    });
+
+    test('Android ble-only device resolves to ble', () {
+      expect(
+        ConnectionController.resolveTransport(deviceA, isIOS: false),
+        ConnectionType.ble,
+      );
+    });
+  });
+
+  group('transport selection + memory', () {
+    Future<void> establishDual({ConnectionType? transport}) async {
+      final Future<void> f = controller.connect(
+        deviceDualMode,
+        transport: transport,
+      );
+      await Future<void>.delayed(Duration.zero);
+      platform.emit(
+        PrintlyConnectionEvent(
+          device: deviceDualMode,
+          state: ConnectionState.connected,
+        ),
+      );
+      await f;
+    }
+
+    test('transportOf is null before any connect', () {
+      expect(controller.transportOf(deviceDualMode), isNull);
+    });
+
+    test('transportOf returns the chosen transport after connect', () async {
+      await establishDual();
+      // Test host is neither iOS nor Android, so ConnectionController's
+      // internal Platform.isIOS check resolves to the "Android" branch —
+      // classic wins for a dual-mode device (see resolveTransport tests).
+      expect(controller.transportOf(deviceDualMode), ConnectionType.classic);
+      expect(platform.connectTransports, <ConnectionType>[
+        ConnectionType.classic,
+      ]);
+    });
+
+    test('connected + explicit different transport disconnects the old link '
+        'then connects fresh over the requested one', () async {
+      await establishDual(); // connected over classic (the default)
+
+      final Future<void> switched = controller.connect(
+        deviceDualMode,
+        transport: ConnectionType.ble,
+      );
+      await Future<void>.delayed(Duration.zero);
+      // The disconnect call has been dispatched and the recursive
+      // connect() has started a fresh native connect attempt.
+      platform.emit(
+        PrintlyConnectionEvent(
+          device: deviceDualMode,
+          state: ConnectionState.connected,
+        ),
+      );
+      await switched;
+
+      expect(platform.callLog, <String>[
+        'connect:classic',
+        'disconnect:classic',
+        'connect:ble',
+      ]);
+      expect(controller.transportOf(deviceDualMode), ConnectionType.ble);
+    });
+
+    test('connected + no explicit transport is a no-op (single platform '
+        'connect total)', () async {
+      await establishDual();
+      await controller.connect(deviceDualMode);
+      expect(platform.connectCalls, 1);
+      expect(platform.disconnectCalls, 0);
+      expect(controller.transportOf(deviceDualMode), ConnectionType.classic);
+    });
+
+    test('connected + explicit SAME transport is a no-op (single platform '
+        'connect total)', () async {
+      await establishDual(transport: ConnectionType.ble);
+      await controller.connect(deviceDualMode, transport: ConnectionType.ble);
+      expect(platform.connectCalls, 1);
+      expect(platform.disconnectCalls, 0);
+    });
+
+    test(
+      'remembered-transport reconnect is a no-op when already connected',
+      () async {
+        // Establish connection over the default (classic on Android).
+        await establishDual();
+        expect(controller.transportOf(deviceDualMode), ConnectionType.classic);
+
+        // Reconnect with the remembered transport (facade-style call).
+        await controller.connect(
+          deviceDualMode,
+          transport: controller.transportOf(deviceDualMode),
+        );
+
+        // Should still be a no-op: no second native connect, no disconnect.
+        expect(platform.connectCalls, 1);
+        expect(platform.disconnectCalls, 0);
+        expect(controller.stateOf(deviceDualMode), ConnectionState.connected);
       },
     );
   });

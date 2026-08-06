@@ -14,8 +14,10 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   int startScanCalls = 0;
   int stopScanCalls = 0;
   Set<ConnectionType>? lastTypes;
+  final List<Set<ConnectionType>> typesCalls = <Set<ConnectionType>>[];
   Completer<void>? startCompleter;
   Object? startError;
+  Object? startErrorOnCall;
 
   @override
   Stream<PrintlyDevice> get scanResults => _resultsController.stream;
@@ -24,7 +26,11 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   Future<void> startScan({required Set<ConnectionType> types}) async {
     startScanCalls++;
     lastTypes = types;
+    typesCalls.add(types);
     if (startCompleter != null) await startCompleter!.future;
+    if (startErrorOnCall != null && startScanCalls == 2) {
+      throw startErrorOnCall!;
+    }
     if (startError != null) throw startError!;
   }
 
@@ -42,15 +48,46 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   @override
   Future<void> connect({
     required PrintlyDevice device,
+    required ConnectionType transport,
     Duration? timeout,
   }) async {}
 
   @override
-  Future<void> disconnect({required PrintlyDevice device}) async {}
+  Future<void> disconnect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+  }) async {}
 
   @override
   Stream<PrintlyConnectionEvent> get connectionEvents =>
       const Stream<PrintlyConnectionEvent>.empty();
+}
+
+/// Extends [_FakePlatform] to let a specific numbered `startScan` call be
+/// held open on a [Completer] — used to deterministically land a manual
+/// [ScanController.stopScan] call in the middle of the round-1→round-2
+/// transition's `await _platform.startScan(...)`, reproducing the orphaned
+/// native scan regression. [_FakePlatform.startCompleter] gates every call
+/// uniformly and cannot isolate a single round, hence this local subclass
+/// instead of touching the shared fake.
+class _GatedStartPlatform extends _FakePlatform {
+  /// 1-indexed call number to gate (e.g. 2 = round 2's startScan).
+  int gateAtCallNumber = 0;
+  Completer<void>? gateOnCall;
+
+  @override
+  Future<void> startScan({required Set<ConnectionType> types}) async {
+    startScanCalls++;
+    lastTypes = types;
+    typesCalls.add(types);
+    if (startScanCalls == gateAtCallNumber && gateOnCall != null) {
+      await gateOnCall!.future;
+    }
+    if (startErrorOnCall != null && startScanCalls == 2) {
+      throw startErrorOnCall!;
+    }
+    if (startError != null) throw startError!;
+  }
 }
 
 void main() {
@@ -169,16 +206,16 @@ void main() {
     test('merges repeat advertisements by transport+address', () async {
       await controller.startScan();
       platform.emit(
-        const PrintlyDevice(
+        PrintlyDevice(
           address: 'AA:BB',
-          type: ConnectionType.ble,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
           rssi: -60,
         ),
       );
       platform.emit(
-        const PrintlyDevice(
+        PrintlyDevice(
           address: 'AA:BB',
-          type: ConnectionType.ble,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
           name: 'Printer',
           rssi: -50,
         ),
@@ -190,33 +227,44 @@ void main() {
       expect(controller.currentDevices.first.rssi, -50);
     });
 
-    test('same address on different transports yields two entries', () async {
+    test('same address on different transports merges into one entry '
+        '(dual-mode radios no longer appear twice)', () async {
       await controller.startScan();
       platform.emit(
-        const PrintlyDevice(address: 'AA:BB', type: ConnectionType.classic),
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
       );
       platform.emit(
-        const PrintlyDevice(address: 'AA:BB', type: ConnectionType.ble),
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
       );
       await Future<void>.delayed(Duration.zero);
 
-      expect(controller.currentDevices, hasLength(2));
+      expect(controller.currentDevices, hasLength(1));
+      expect(
+        controller.currentDevices.single.availableTransports,
+        <ConnectionType>{ConnectionType.classic, ConnectionType.ble},
+      );
     });
 
     test('keeps existing name when a later advertisement omits it', () async {
       await controller.startScan();
       platform.emit(
-        const PrintlyDevice(
+        PrintlyDevice(
           address: 'AA:BB',
-          type: ConnectionType.ble,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
           name: 'Printer',
           rssi: -55,
         ),
       );
       platform.emit(
-        const PrintlyDevice(
+        PrintlyDevice(
           address: 'AA:BB',
-          type: ConnectionType.ble,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
           rssi: -40,
         ),
       );
@@ -230,7 +278,10 @@ void main() {
     test('startScan clears previous device list', () async {
       await controller.startScan();
       platform.emit(
-        const PrintlyDevice(address: 'AA:BB', type: ConnectionType.ble),
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
       );
       await Future<void>.delayed(Duration.zero);
       expect(controller.currentDevices, hasLength(1));
@@ -260,7 +311,10 @@ void main() {
       await controller.startScan();
       await controller.dispose();
       platform.emit(
-        const PrintlyDevice(address: 'AA:BB', type: ConnectionType.ble),
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
       );
       await Future<void>.delayed(Duration.zero);
       // Disposed — no throws, further public calls raise StateError.
@@ -272,6 +326,99 @@ void main() {
         types: const <ConnectionType>{ConnectionType.ble},
       );
       expect(platform.lastTypes, <ConnectionType>{ConnectionType.ble});
+    });
+  });
+
+  group('field-informed defaults + seenInScan + includeBonded', () {
+    test('same address over Classic and BLE yields ONE record with both '
+        'transports', () async {
+      await controller.startScan(timeout: const Duration(days: 1));
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+          name: 'PTP-II',
+        ),
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+          rssi: -58,
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+      expect(
+        controller.currentDevices.single.availableTransports,
+        <ConnectionType>{ConnectionType.classic, ConnectionType.ble},
+      );
+      expect(controller.currentDevices.single.name, 'PTP-II');
+    });
+
+    test('a bonded seed later seen in inquiry updates the SAME record to '
+        'seenInScan', () async {
+      await controller.startScan(timeout: const Duration(days: 1));
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          isBonded: true,
+          seenInScan: false,
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices.single.seenInScan, isFalse);
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+      expect(controller.currentDevices.single.seenInScan, isTrue);
+    });
+
+    test('includeBonded: false drops bonded-only seeds but keeps devices '
+        'actually seen', () async {
+      await controller.startScan(
+        timeout: const Duration(days: 1),
+        includeBonded: false,
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          isBonded: true,
+          seenInScan: false,
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'CC:DD',
+          isBonded: true,
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+      expect(controller.currentDevices.single.address, 'CC:DD');
+    });
+
+    test('defaultScanTypesForPlatform: iOS never asks for classic', () {
+      expect(
+        ScanController.defaultScanTypesForPlatform(isIOS: true),
+        <ConnectionType>{ConnectionType.ble},
+      );
+      expect(
+        ScanController.defaultScanTypesForPlatform(isIOS: false),
+        <ConnectionType>{ConnectionType.classic, ConnectionType.ble},
+      );
+    });
+
+    test('kDefaultScanTimeout is 10 seconds', () {
+      expect(kDefaultScanTimeout, const Duration(seconds: 10));
     });
   });
 
@@ -288,7 +435,12 @@ void main() {
       await Future<void>.delayed(Duration.zero); // seeded empty emission
 
       for (int i = 0; i < 10; i++) {
-        platform.emit(PrintlyDevice(address: 'D$i', type: ConnectionType.ble));
+        platform.emit(
+          PrintlyDevice(
+            address: 'D$i',
+            availableTransports: <ConnectionType>{ConnectionType.ble},
+          ),
+        );
       }
       await Future<void>.delayed(const Duration(milliseconds: 90));
 
@@ -298,6 +450,243 @@ void main() {
 
       await sub.cancel();
       await coalesced.dispose();
+    });
+  });
+
+  group('classicFirst scan strategy', () {
+    test('(a) no named device in round 1: falls back to a single BLE round, '
+        'preserving the device list and staying "scanning" across the '
+        'transition', () async {
+      final List<bool> scanningFlags = <bool>[];
+      final StreamSubscription<bool> sub = controller.isScanningStream.listen(
+        scanningFlags.add,
+      );
+
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 30),
+        strategy: ScanStrategy.classicFirst,
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.currentDevices, hasLength(1));
+
+      // Past round 1's window (30ms), inside round 2's window (next 30ms).
+      await Future<void>.delayed(const Duration(milliseconds: 45));
+
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+      // Round 2 does not clear what round 1 already found.
+      expect(controller.currentDevices, hasLength(1));
+      expect(controller.currentDevices.single.address, 'AA:BB');
+      // No false emitted between the seeded value, the scan starting, and
+      // now — the classic->ble transition must not flicker isScanning.
+      expect(scanningFlags, <bool>[false, true]);
+      expect(controller.isScanning, isTrue);
+
+      await sub.cancel();
+    });
+
+    test('(b) a named+seenInScan device answers round 1: single platform call, '
+        'no BLE fallback round', () async {
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 20),
+        strategy: ScanStrategy.classicFirst,
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+          name: 'PTP-II',
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+      ]);
+      expect(platform.stopScanCalls, 1);
+      expect(controller.isScanning, isFalse);
+    });
+
+    test('(c) round 2 also finds nothing: no third round is ever started and '
+        'isScanning ends false', () async {
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 20),
+        strategy: ScanStrategy.classicFirst,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+      expect(platform.stopScanCalls, 2);
+      expect(controller.isScanning, isFalse);
+    });
+
+    test('(d) parallel strategy issues a single call with the given types '
+        'verbatim', () async {
+      await controller.startScan(
+        types: const <ConnectionType>{ConnectionType.ble},
+        strategy: ScanStrategy.parallel,
+      );
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+      expect(platform.startScanCalls, 1);
+    });
+
+    test('(e) manual stopScan during round 1 cancels the whole strategy — no '
+        'fallback round', () async {
+      await controller.startScan(
+        timeout: const Duration(days: 1),
+        strategy: ScanStrategy.classicFirst,
+      );
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+      ]);
+
+      await controller.stopScan();
+      // Give any (incorrect) fallback logic a chance to fire.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+      ]);
+      expect(controller.isScanning, isFalse);
+    });
+
+    test('(f) a bonded-seed-only named device (seenInScan false) does not '
+        'count as "found" — fallback still runs', () async {
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 30),
+        strategy: ScanStrategy.classicFirst,
+      );
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          isBonded: true,
+          seenInScan: false,
+          name: 'PTP-II',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      await Future<void>.delayed(const Duration(milliseconds: 45));
+
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+      expect(controller.isScanning, isTrue);
+    });
+
+    test("round 2's native startScan failing surfaces through scanErrors and "
+        'ends the scan', () async {
+      platform.startErrorOnCall = PlatformException(
+        code: 'start_scan_failed',
+        message: 'bluetooth_not_powered_on',
+      );
+      final Future<PrintlyException> firstError = controller.scanErrors.first;
+
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 20),
+        strategy: ScanStrategy.classicFirst,
+      );
+      final PrintlyException error = await firstError;
+
+      expect(error, isA<PrintlyScanException>());
+      expect(error.code, PrintlyErrorCode.bluetoothNotPoweredOn);
+      expect(controller.isScanning, isFalse);
+      expect(platform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+    });
+
+    test(
+      'classicFirst ignores an explicit types: on round 1, non-iOS host',
+      () async {
+        await controller.startScan(
+          types: const <ConnectionType>{ConnectionType.ble},
+          strategy: ScanStrategy.classicFirst,
+        );
+        expect(platform.typesCalls, <Set<ConnectionType>>[
+          <ConnectionType>{ConnectionType.classic},
+        ]);
+      },
+    );
+  });
+
+  group('roundOneTypes', () {
+    test('iOS -> {ble}, non-iOS -> {classic}', () {
+      expect(ScanController.roundOneTypes(isIOS: true), <ConnectionType>{
+        ConnectionType.ble,
+      });
+      expect(ScanController.roundOneTypes(isIOS: false), <ConnectionType>{
+        ConnectionType.classic,
+      });
+    });
+  });
+
+  group('orphaned scan on stopScan race', () {
+    test('a manual stopScan racing the round-1->round-2 transition stops the '
+        'just-started BLE scan instead of orphaning it', () async {
+      final _GatedStartPlatform gatedPlatform = _GatedStartPlatform();
+      final ScanController gatedController = ScanController(
+        platform: gatedPlatform,
+        emitInterval: Duration.zero,
+      );
+      addTearDown(() async {
+        await gatedController.dispose();
+        await gatedPlatform.close();
+      });
+
+      // Gate round 2's startScan({ble}) — the 2nd call — open on a
+      // Completer so a concurrent stopScan() can be driven to completion
+      // while it is in flight.
+      gatedPlatform.gateAtCallNumber = 2;
+      gatedPlatform.gateOnCall = Completer<void>();
+
+      unawaited(
+        gatedController.startScan(
+          timeout: const Duration(milliseconds: 20),
+          strategy: ScanStrategy.classicFirst,
+        ),
+      );
+
+      // Let round 1 elapse with nothing named; the transition stops
+      // round 1's classic scan and dispatches round 2's startScan({ble}),
+      // which is now parked on the gate.
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(gatedPlatform.typesCalls, <Set<ConnectionType>>[
+        <ConnectionType>{ConnectionType.classic},
+        <ConnectionType>{ConnectionType.ble},
+      ]);
+      expect(gatedPlatform.stopScanCalls, 1); // round 1's stop only so far
+
+      // Concurrent manual stop, racing the still-gated round-2 startScan.
+      await gatedController.stopScan();
+      expect(gatedController.isScanning, isFalse);
+      expect(gatedPlatform.stopScanCalls, 2);
+
+      // Release the gate: round 2's startScan resolves inside
+      // _runFallbackRound, which must now observe isScanning == false and
+      // issue a FINAL stopScan to avoid leaving an orphaned native BLE
+      // scan running forever.
+      gatedPlatform.gateOnCall!.complete();
+      await pumpEventQueue();
+
+      expect(gatedPlatform.stopScanCalls, 3);
+      expect(gatedController.isScanning, isFalse);
     });
   });
 }

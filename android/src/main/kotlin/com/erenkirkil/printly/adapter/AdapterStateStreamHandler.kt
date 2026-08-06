@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import androidx.core.content.ContextCompat
-import com.erenkirkil.printly.util.PermissionChecker
 import com.erenkirkil.printly.util.WireCodes
 import io.flutter.plugin.common.EventChannel
 
@@ -80,13 +79,28 @@ internal class AdapterStateStreamHandler(
 
     private fun encode(adapter: BluetoothAdapter?): Int {
         if (adapter == null) return WireCodes.ADAPTER_UNSUPPORTED
-        if (!PermissionChecker.hasConnect(appContext)) return WireCodes.ADAPTER_UNAUTHORIZED
-        return if (adapter.isEnabled) WireCodes.ADAPTER_POWERED_ON else WireCodes.ADAPTER_POWERED_OFF
+        // The permission short-circuit that used to live here synthesized
+        // ADAPTER_UNAUTHORIZED, conflating "radio state" with "permission
+        // state" — and because Android only broadcasts ACTION_STATE_CHANGED
+        // for radio transitions, the value froze until process restart once
+        // emitted. Permission is now the consumer's question to ask via
+        // checkPermissions(); this channel reports the radio alone.
+        // BluetoothAdapter.isEnabled is annotated BLUETOOTH_CONNECT on
+        // API 31+, so without the permission some OEM builds throw — fall
+        // back to UNKNOWN rather than lying about the radio.
+        return try {
+            if (adapter.isEnabled) {
+                WireCodes.ADAPTER_POWERED_ON
+            } else {
+                WireCodes.ADAPTER_POWERED_OFF
+            }
+        } catch (_: SecurityException) {
+            WireCodes.ADAPTER_UNKNOWN
+        }
     }
 
     private fun encodeFromRaw(raw: Int, adapter: BluetoothAdapter?): Int {
         if (adapter == null) return WireCodes.ADAPTER_UNSUPPORTED
-        if (!PermissionChecker.hasConnect(appContext)) return WireCodes.ADAPTER_UNAUTHORIZED
         return when (raw) {
             BluetoothAdapter.STATE_ON -> WireCodes.ADAPTER_POWERED_ON
             BluetoothAdapter.STATE_OFF -> WireCodes.ADAPTER_POWERED_OFF

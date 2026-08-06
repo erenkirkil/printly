@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:rxdart/rxdart.dart';
@@ -9,9 +10,11 @@ import '../core/printly_exception.dart';
 import '../platform/printly_platform_interface.dart';
 
 /// Default timeout for [ScanController.startScan] when the caller does not
-/// provide one. Chosen to align with Android 8+ BLE scan windowing, which
-/// throttles opportunistic scans after ~30 seconds.
-const Duration kDefaultScanTimeout = Duration(seconds: 30);
+/// provide one. A powered, in-range thermal printer answers within the
+/// first few seconds; the remaining window only harvests anonymous ambient
+/// BLE advertisers and keeps the radio busy — measured in the field at
+/// ~100 devices in 30 s.
+const Duration kDefaultScanTimeout = Duration(seconds: 10);
 
 /// Default set of transports to scan when the caller passes no explicit
 /// preference. Network scanning is intentionally excluded — network printers
@@ -28,6 +31,55 @@ const Set<ConnectionType> kDefaultScanTypes = <ConnectionType>{
 /// into a single update, which is the difference between a smooth list and a
 /// janky one on a device-dense floor.
 const Duration kScanEmitInterval = Duration(milliseconds: 250);
+
+/// Execution strategy for [ScanController.startScan].
+enum ScanStrategy {
+  /// Requests every configured transport in a single native scan. This is
+  /// the strategy [ScanController] used before [classicFirst] existed, and
+  /// remains the default.
+  parallel,
+
+  /// Android-only two-round strategy encoding a pattern observed in the
+  /// field: a Bluetooth Classic inquiry saturates the 2.4 GHz radio,
+  /// starving a concurrent BLE scan of airtime. Scanning Classic first and
+  /// only falling back to BLE once nothing answered finds printers a
+  /// parallel scan can miss under radio contention — this is how the
+  /// reference kentkart app located the PTP-II.
+  ///
+  /// Round 1 requests `{ConnectionType.classic}` only, for the resolved
+  /// timeout. When that window elapses, [ScanController.currentDevices] is
+  /// checked for a device with [PrintlyDevice.hasName] and
+  /// [PrintlyDevice.seenInScan] both `true` (a bonded-cache seed that was
+  /// never actually confirmed by an inquiry does not count, see
+  /// [PrintlyDevice.seenInScan]):
+  /// - If one is present, a real printer already answered Classic and the
+  ///   scan stops normally — a BLE round would only add radio contention
+  ///   for no benefit.
+  /// - Otherwise the native scan is stopped and restarted with
+  ///   `{ConnectionType.ble}` for the *same* timeout duration. The device
+  ///   list accumulated in round 1 is preserved, not cleared, and
+  ///   [ScanController.isScanningStream] never emits `false` during the
+  ///   transition — from the caller's point of view this reads as one
+  ///   continuous scan, not two.
+  ///
+  /// There is never a third round (loop protection): whatever round 2
+  /// finds — or doesn't — the strategy ends there. Alternating
+  /// Classic/BLE indefinitely on an empty result would just spin the radio
+  /// forever for a printer that genuinely isn't in range.
+  ///
+  /// Ignored on iOS, which has no public Bluetooth Classic API — there,
+  /// `classicFirst` degrades silently to a single `{ConnectionType.ble}`
+  /// round (equivalent to [parallel] with `types: {ConnectionType.ble}`).
+  ///
+  /// Types precedence: when [ScanController.startScan]'s `types` argument
+  /// is supplied together with this strategy, the strategy governs and
+  /// `types` is ignored for round composition (round 1 is always
+  /// `{classic}`, round 2 always `{ble}`). Letting an explicit transport
+  /// set override a strategy that already dictates transports per round
+  /// would be an ambiguous contract; the simplest honest one is that the
+  /// strategy decides.
+  classicFirst,
+}
 
 /// Owns the discovery lifecycle and exposes deduplicated device lists.
 ///
@@ -72,9 +124,42 @@ class ScanController {
   Future<void>? _pendingStart;
   Future<void>? _pendingStop;
   bool _disposed = false;
+  bool _includeBonded = true;
+
+  /// Whether the in-progress scan is running the Android two-round
+  /// [ScanStrategy.classicFirst] transition (i.e. `strategy` was
+  /// `classicFirst` *and* the platform is not iOS — see [ScanStrategy]).
+  bool _classicFirstActive = false;
+
+  /// Whether round 2 (the BLE fallback round) has already been started —
+  /// this is the loop-protection flag: once `true`,
+  /// [_onScanWindowElapsed] never starts another round.
+  bool _fallbackRoundDone = false;
+
+  /// The timeout each classicFirst round runs for; round 2 reuses the same
+  /// duration round 1 was given.
+  Duration? _activeTimeout;
 
   /// Broadcast stream of the currently known devices, deduplicated and
   /// emitted as an immutable list on each change.
+  ///
+  /// Three things to know before wiring this into UI:
+  /// - The list replays for the lifetime of the controller — it never
+  ///   forgets a device on its own between scans. Call [clearDevices] before
+  ///   a fresh scan if stale entries from a previous session/location would
+  ///   be misleading.
+  /// - Treat [isScanningStream] as the transition signal, not this stream: a
+  ///   device can still be added or updated for a moment after scanning
+  ///   stops (the final coalesced flush in [stopScan]).
+  /// - A Classic bonded-cache seed ([PrintlyDevice.seenInScan] `false`) can
+  ///   be out of range or long powered off — its presence here only means it
+  ///   is paired at the OS level, not that it is reachable right now.
+  ///
+  /// Screen-scoped consumers (a subscription that starts and ends with one
+  /// screen) should prefer `Printly.instance.newScanSession()` instead —
+  /// this stream's replay-to-every-subscriber behaviour is right for the
+  /// process-wide singleton but leaks a previous screen's stale state into
+  /// a fresh one.
   Stream<List<PrintlyDevice>> get devicesStream => _devicesSubject.stream;
 
   /// Broadcast stream signalling whether a native scan is in progress.
@@ -105,11 +190,31 @@ class ScanController {
   /// parallel native scans or leak timers. Calling it while a [stopScan] is
   /// still in flight queues the start behind the pending stop (the natural
   /// "rescan" gesture), instead of silently dropping it.
+  ///
+  /// [timeout] defaults to [kDefaultScanTimeout] when omitted. [types]
+  /// defaults to [defaultScanTypesForPlatform] for the running platform
+  /// (iOS never requests Classic — it has no public Classic API). When
+  /// [includeBonded] is `false`, Classic bonded-cache seeds
+  /// ([PrintlyDevice.seenInScan] `false`) are dropped instead of being
+  /// added to [devicesStream]; a seed later confirmed by an actual inquiry
+  /// result still appears once [PrintlyDevice.mergeWith] flips
+  /// [PrintlyDevice.seenInScan] to `true`.
+  ///
+  /// [strategy] defaults to [ScanStrategy.parallel] (the historical
+  /// behaviour: [types] requested in one native scan). See
+  /// [ScanStrategy.classicFirst] for the Android Classic-then-BLE fallback
+  /// strategy, including why an explicit [types] is ignored when [strategy]
+  /// is [ScanStrategy.classicFirst].
   Future<void> startScan({
-    Duration timeout = kDefaultScanTimeout,
-    Set<ConnectionType> types = kDefaultScanTypes,
+    Duration? timeout,
+    Set<ConnectionType>? types,
+    bool includeBonded = true,
+    ScanStrategy strategy = ScanStrategy.parallel,
   }) {
     _assertNotDisposed();
+    final Duration effectiveTimeout = timeout ?? kDefaultScanTimeout;
+    final Set<ConnectionType> effectiveTypes =
+        types ?? defaultScanTypesForPlatform(isIOS: Platform.isIOS);
     if (_pendingStart != null) return _pendingStart!;
 
     final Future<void>? stopping = _pendingStop;
@@ -120,30 +225,81 @@ class ScanController {
       // stop still lets the start proceed.
       _pendingStart = stopping
           .then<void>((_) {}, onError: (_) {})
-          .then((_) => _runStart(timeout: timeout, types: types));
+          .then(
+            (_) => _runStart(
+              timeout: effectiveTimeout,
+              types: effectiveTypes,
+              includeBonded: includeBonded,
+              strategy: strategy,
+            ),
+          );
       return _pendingStart!;
     }
     if (isScanning) return Future<void>.value();
 
-    _pendingStart = _runStart(timeout: timeout, types: types);
+    _pendingStart = _runStart(
+      timeout: effectiveTimeout,
+      types: effectiveTypes,
+      includeBonded: includeBonded,
+      strategy: strategy,
+    );
     return _pendingStart!;
   }
+
+  /// Platform-aware default transport set for [startScan] when the caller
+  /// passes no explicit [startScan.types]. Separated as a pure, static
+  /// function (rather than reading `Platform.isIOS` inline) so it is
+  /// testable without a platform channel or device.
+  ///
+  /// iOS is BLE-only here because it has no public Bluetooth Classic API —
+  /// requesting Classic there would either be ignored or fail outright, so
+  /// asking for it by default is never useful. Android gets both: Classic
+  /// SPP/RFCOMM printers remain common in the field alongside BLE ones.
+  static Set<ConnectionType> defaultScanTypesForPlatform({
+    required bool isIOS,
+  }) => isIOS ? const <ConnectionType>{ConnectionType.ble} : kDefaultScanTypes;
+
+  /// Round-1 transport set for [ScanStrategy.classicFirst], factored out as
+  /// a pure, static function for the same testability reason as
+  /// [defaultScanTypesForPlatform]: no platform channel or device needed to
+  /// exercise the per-platform branch.
+  ///
+  /// iOS has no public Bluetooth Classic API, so classicFirst degrades to a
+  /// single `{ble}` round there (see [ScanStrategy.classicFirst]); every
+  /// other platform gets a real `{classic}` round 1.
+  static Set<ConnectionType> roundOneTypes({required bool isIOS}) => isIOS
+      ? const <ConnectionType>{ConnectionType.ble}
+      : const <ConnectionType>{ConnectionType.classic};
 
   Future<void> _runStart({
     required Duration timeout,
     required Set<ConnectionType> types,
+    required bool includeBonded,
+    required ScanStrategy strategy,
   }) async {
     try {
       _emitTimer?.cancel();
       _emitTimer = null;
       _dedup.clear();
+      _includeBonded = includeBonded;
       _devicesSubject.add(const <PrintlyDevice>[]);
       _isScanningSubject.add(true);
-      await _platform.startScan(types: types);
+
+      // classicFirst only means something where Classic exists; on iOS it
+      // silently degrades to a plain single {ble} round (see [ScanStrategy]).
+      _classicFirstActive =
+          strategy == ScanStrategy.classicFirst && !Platform.isIOS;
+      _fallbackRoundDone = false;
+      _activeTimeout = timeout;
+
+      final Set<ConnectionType> round1Types =
+          strategy == ScanStrategy.classicFirst
+          ? roundOneTypes(isIOS: Platform.isIOS)
+          : types;
+
+      await _platform.startScan(types: round1Types);
       _timeoutTimer?.cancel();
-      _timeoutTimer = Timer(timeout, () {
-        unawaited(stopScan());
-      });
+      _timeoutTimer = Timer(timeout, _onScanWindowElapsed);
     } catch (_) {
       _isScanningSubject.add(false);
       _timeoutTimer?.cancel();
@@ -151,6 +307,86 @@ class ScanController {
       rethrow;
     } finally {
       _pendingStart = null;
+    }
+  }
+
+  /// Called when a round's timeout timer fires. Routes to a normal stop, or
+  /// — mid [ScanStrategy.classicFirst] with the fallback round not yet
+  /// started — decides whether round 1 already found a printer or a BLE
+  /// fallback round is needed. See [ScanStrategy.classicFirst] for the full
+  /// contract; [_fallbackRoundDone] is what guarantees a third round never
+  /// happens.
+  void _onScanWindowElapsed() {
+    if (_classicFirstActive && !_fallbackRoundDone) {
+      final bool foundNamedDevice = _dedup.values.any(
+        (PrintlyDevice device) => device.hasName && device.seenInScan,
+      );
+      if (foundNamedDevice) {
+        unawaited(stopScan());
+      } else {
+        unawaited(_runFallbackRound());
+      }
+      return;
+    }
+    unawaited(stopScan());
+  }
+
+  /// Transitions from the Classic round to the BLE fallback round: stops the
+  /// native Classic scan, starts a native BLE scan, and re-arms the timeout
+  /// timer for the same duration round 1 used. [_dedup] and
+  /// [_isScanningSubject] are deliberately left untouched — the accumulated
+  /// device list survives the transition and callers never see `isScanning`
+  /// flip to `false` in between, so this reads as one continuous scan.
+  ///
+  /// If a manual [stopScan] completes while this transition is in flight
+  /// (native calls are async — the transition holds neither [_pendingStart]
+  /// nor [_pendingStop], so a public [stopScan] races it freely),
+  /// [isScanning] observes `false` once we regain control and the
+  /// transition is abandoned instead of resurrecting a scan the caller just
+  /// asked to stop. There are two places this can be observed, and both
+  /// matter:
+  /// - Between this round's own `stopScan()` and its `startScan()`: round 2
+  ///   must simply never start. The check below the first `await` covers
+  ///   this.
+  /// - Between this round's `startScan()` dispatch and the check right
+  ///   after it: the concurrent stop's native `stopScan()` call raced (and
+  ///   lost) against this round's `startScan()`, so a BLE scan is now
+  ///   running natively with nothing left to stop it — every future public
+  ///   [stopScan] short-circuits once it observes `isScanning` already
+  ///   `false`. Left alone this orphans the radio in a scan that runs
+  ///   forever, invisible to the caller. So this path explicitly issues its
+  ///   own best-effort `stopScan()` before bailing out.
+  Future<void> _runFallbackRound() async {
+    _fallbackRoundDone = true;
+    try {
+      await _platform.stopScan();
+      // Pre-start hole: a concurrent stop landed between the transition's
+      // own stopScan() (above) and startScan() (below) — round 2 must not
+      // start at all.
+      if (_disposed || !isScanning) return;
+      await _platform.startScan(
+        types: const <ConnectionType>{ConnectionType.ble},
+      );
+      // Post-start hole: a concurrent stop raced this startScan() and lost,
+      // so the native BLE scan we just started is orphaned unless we stop
+      // it ourselves here — see the doc comment above for why.
+      if (_disposed || !isScanning) {
+        try {
+          await _platform.stopScan();
+        } catch (_) {
+          // Best-effort: the goal is not leaking the radio, not surfacing a
+          // redundant stop failure on top of whatever already happened.
+        }
+        return;
+      }
+      _timeoutTimer?.cancel();
+      _timeoutTimer = Timer(_activeTimeout!, _onScanWindowElapsed);
+    } catch (error) {
+      if (_disposed) return;
+      _scanErrorsSubject.add(_typedScanError(error));
+      _isScanningSubject.add(false);
+      _timeoutTimer?.cancel();
+      _timeoutTimer = null;
     }
   }
 
@@ -196,14 +432,11 @@ class ScanController {
 
   void _onDeviceDiscovered(PrintlyDevice device) {
     if (_disposed) return;
+    if (!_includeBonded && !device.seenInScan) return;
     final PrintlyDevice? existing = _dedup[device.dedupKey];
     final PrintlyDevice merged = existing == null
         ? device
-        : existing.copyWith(
-            name: device.name ?? existing.name,
-            rssi: device.rssi ?? existing.rssi,
-            isBonded: device.isBonded || existing.isBonded,
-          );
+        : existing.mergeWith(device);
     _dedup[device.dedupKey] = merged;
     _scheduleEmit();
   }

@@ -69,6 +69,44 @@ abstract class PrintlyPlatform extends PlatformInterface {
     );
   }
 
+  /// Asks the native side to request that the user turn Bluetooth on, in
+  /// place, without leaving the app.
+  ///
+  /// Returns whether the system request was actually **shown** — not
+  /// whether the radio ended up on. This call does not wait for the user's
+  /// decision; watch [adapterState] to observe the outcome. Returns `false`
+  /// as a no-op when the radio is already on.
+  Future<bool> requestEnableBluetooth() {
+    throw UnimplementedError(
+      'requestEnableBluetooth() has not been implemented.',
+    );
+  }
+
+  /// Whether the OS location service currently gates Bluetooth scanning on
+  /// this device.
+  ///
+  /// On Android below API 31 both Classic inquiry and BLE scanning depend on
+  /// the location service — not just the location *permission* — and return
+  /// no results at all (with no platform error) when it is off. From API 31
+  /// printly declares `BLUETOOTH_SCAN` with `neverForLocation`, which removes
+  /// the dependency entirely, so this always returns `true` there. iOS never
+  /// depends on the location service for Bluetooth, so this always returns
+  /// `true` on iOS too.
+  Future<bool> isLocationServiceEnabled() {
+    throw UnimplementedError(
+      'isLocationServiceEnabled() has not been implemented.',
+    );
+  }
+
+  /// Opens the system location settings page so the user can turn the
+  /// location service on. Android only — returns `false` as a no-op on iOS,
+  /// where this SDK does not touch CoreLocation.
+  Future<bool> openLocationSettings() {
+    throw UnimplementedError(
+      'openLocationSettings() has not been implemented.',
+    );
+  }
+
   /// Asks the native side to start discovering devices of the given [types].
   ///
   /// The returned future completes as soon as the native scan has been
@@ -97,33 +135,54 @@ abstract class PrintlyPlatform extends PlatformInterface {
     throw UnimplementedError('scanResults has not been implemented.');
   }
 
-  /// Asks the native side to open a link to [device]. The future completes
-  /// once the native stack reports the link as open, or rejects with a
-  /// [PlatformException] if the attempt fails (permission denied, timeout,
-  /// remote refusal, etc.).
+  /// Asks the native side to open a link to [device] over [transport]. The
+  /// future completes once the native stack reports the link as open, or
+  /// rejects with a [PlatformException] if the attempt fails (permission
+  /// denied, timeout, remote refusal, etc.).
+  ///
+  /// [transport] must be one of [PrintlyDevice.availableTransports] — the
+  /// caller (`ConnectionController`) resolves which one before dispatching
+  /// here. The **same** [transport] value must also be passed to the
+  /// matching [disconnect] and [write] calls for this device: the native
+  /// side keys a session by `type:address`, so a mismatched transport across
+  /// the three calls silently misses the session instead of erroring.
   ///
   /// Per-device state transitions that happen after the future resolves —
   /// e.g. a remote disconnect, an auto-reconnect retry — arrive through
   /// [connectionEvents].
-  Future<void> connect({required PrintlyDevice device, Duration? timeout}) {
+  Future<void> connect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+    Duration? timeout,
+  }) {
     throw UnimplementedError('connect() has not been implemented.');
   }
 
-  /// Asks the native side to close the link to [device]. Safe to call when
-  /// no link is open for [device]; native implementations must treat this as
-  /// a no-op in that case.
-  Future<void> disconnect({required PrintlyDevice device}) {
+  /// Asks the native side to close the link to [device] over [transport].
+  /// Safe to call when no link is open for [device]; native implementations
+  /// must treat this as a no-op in that case.
+  ///
+  /// [transport] must match the value passed to the [connect] call that
+  /// opened this session — see the note on [connect].
+  Future<void> disconnect({
+    required PrintlyDevice device,
+    required ConnectionType transport,
+  }) {
     throw UnimplementedError('disconnect() has not been implemented.');
   }
 
-  /// Writes [bytes] to the open link to [device].
+  /// Writes [bytes] to the open link to [device] over [transport].
   ///
   /// The future completes once the native stack has handed the payload to the
   /// transport (RFCOMM `OutputStream` flush, or the final GATT characteristic
   /// write acknowledgement), or rejects with a [PlatformException] when no link
   /// is open, the link is not yet ready for writes, or the transport fails.
+  ///
+  /// [transport] must match the value passed to the [connect] call that
+  /// opened this session — see the note on [connect].
   Future<void> write({
     required PrintlyDevice device,
+    required ConnectionType transport,
     required Uint8List bytes,
   }) {
     throw UnimplementedError('write() has not been implemented.');

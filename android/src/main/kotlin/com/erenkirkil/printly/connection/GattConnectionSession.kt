@@ -66,6 +66,16 @@ internal class GattConnectionSession(
     // Granted ATT MTU; stays at the spec default until onMtuChanged fires.
     private var mtu = DEFAULT_MTU
 
+    // Android's GATT stack runs ONE client operation at a time. Issuing
+    // requestMtu() and discoverServices() back-to-back silently drops the
+    // discovery request on some stacks (observed on Android 11:
+    // discoverServices() returns true but onServicesDiscovered never fires,
+    // so connect dies on the soft timeout). Discovery is therefore chained
+    // after the MTU exchange settles; the fallback timer covers peripherals
+    // whose stack never delivers onMtuChanged.
+    private var discoveryStarted = false
+    private var mtuFallback: Runnable? = null
+
     /** Whether the link is up and a writable characteristic is resolved. */
     fun isReady(): Boolean = ready && !closed && !disconnectRequested
 
@@ -153,12 +163,22 @@ internal class GattConnectionSession(
             newState == BluetoothGatt.STATE_CONNECTED &&
                 status == BluetoothGatt.GATT_SUCCESS -> {
                 // Ask for a large MTU so raster payloads move in fewer, bigger
-                // chunks. Readiness never blocks on the grant: until (and
-                // unless) onMtuChanged fires, writes use the default-MTU chunk
-                // size exactly as before.
-                try { g.requestMtu(REQUESTED_MTU) } catch (_: Throwable) {}
-                val started = try { g.discoverServices() } catch (_: Throwable) { false }
-                if (!started) failConnect("service_discovery_failed")
+                // chunks, then chain service discovery behind the MTU result —
+                // never alongside it (see discoveryStarted above). Readiness
+                // still never blocks on the grant: if onMtuChanged never fires
+                // the fallback starts discovery with the default MTU.
+                val mtuRequested = try {
+                    g.requestMtu(REQUESTED_MTU)
+                } catch (_: Throwable) {
+                    false
+                }
+                if (mtuRequested) {
+                    val r = Runnable { startDiscovery(g) }
+                    mtuFallback = r
+                    handler.postDelayed(r, MTU_TIMEOUT_MS)
+                } else {
+                    startDiscovery(g)
+                }
             }
             newState == BluetoothGatt.STATE_CONNECTED ->
                 failConnect("gatt_status_$status")
@@ -188,9 +208,26 @@ internal class GattConnectionSession(
     }
 
     private fun handleMtuChanged(grantedMtu: Int, status: Int) {
+        cancelMtuFallback()
         if (status == BluetoothGatt.GATT_SUCCESS && grantedMtu > 0) {
             mtu = grantedMtu
         }
+        gatt?.let { startDiscovery(it) }
+    }
+
+    /** Starts service discovery exactly once per session, no matter whether
+     * the MTU callback and the fallback timer race each other. */
+    @SuppressLint("MissingPermission")
+    private fun startDiscovery(g: BluetoothGatt) {
+        if (discoveryStarted || closed) return
+        discoveryStarted = true
+        val started = try { g.discoverServices() } catch (_: Throwable) { false }
+        if (!started) failConnect("service_discovery_failed")
+    }
+
+    private fun cancelMtuFallback() {
+        mtuFallback?.let { handler.removeCallbacks(it) }
+        mtuFallback = null
     }
 
     private fun handleCharacteristicWrite(status: Int) {
@@ -281,6 +318,7 @@ internal class GattConnectionSession(
         closed = true
         cancelConnectTimeout()
         cancelWriteWatchdog()
+        cancelMtuFallback()
         failWrite(IOException(WireCodes.Reasons.DISCONNECTED))
         val g = gatt ?: return
         try { g.disconnect() } catch (_: Throwable) {}
@@ -407,6 +445,10 @@ internal class GattConnectionSession(
         // the peripheral actually supports. Groundwork for the raster sprint —
         // bitmap payloads at 20 bytes per write are unusably slow.
         const val REQUESTED_MTU = 517
+
+        // How long to wait for onMtuChanged before starting discovery anyway
+        // (the write path then keeps the spec-default MTU, exactly as before).
+        const val MTU_TIMEOUT_MS = 1_500L
 
         // Per-write ATT overhead: opcode (1 byte) + attribute handle (2 bytes).
         const val ATT_HEADER_BYTES = 3

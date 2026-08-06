@@ -36,6 +36,12 @@ void main() {
               return 31;
             case 'openBluetoothSettings':
               return true;
+            case 'requestEnableBluetooth':
+              return true;
+            case 'isLocationServiceEnabled':
+              return false;
+            case 'openLocationSettings':
+              return true;
             default:
               return null;
           }
@@ -66,6 +72,56 @@ void main() {
   test('getAndroidSdkInt delegates and unwraps the int', () async {
     expect(await platform.getAndroidSdkInt(), 31);
     expect(invokedMethod, 'getAndroidSdkInt');
+  });
+
+  test(
+    'requestEnableBluetooth invokes the wire method and returns the flag',
+    () async {
+      expect(await platform.requestEnableBluetooth(), isTrue);
+      expect(invocations.single.method, 'requestEnableBluetooth');
+    },
+  );
+
+  test('requestEnableBluetooth maps permission_denied to '
+      'PrintlyPermissionException', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(methodChannel, (MethodCall call) async {
+          throw PlatformException(
+            code: 'permission_denied',
+            message: 'bluetooth_connect_required',
+          );
+        });
+    await expectLater(
+      platform.requestEnableBluetooth(),
+      throwsA(isA<PrintlyPermissionException>()),
+    );
+  });
+
+  test(
+    'isLocationServiceEnabled invokes the wire method and returns the flag',
+    () async {
+      expect(await platform.isLocationServiceEnabled(), isFalse);
+      expect(invocations.single.method, 'isLocationServiceEnabled');
+    },
+  );
+
+  test(
+    'openLocationSettings invokes the wire method and returns the flag',
+    () async {
+      expect(await platform.openLocationSettings(), isTrue);
+      expect(invocations.single.method, 'openLocationSettings');
+    },
+  );
+
+  test('locationServicesDisabled round-trips through its wire name', () {
+    expect(
+      PrintlyErrorCode.fromWireName('location_services_disabled'),
+      PrintlyErrorCode.locationServicesDisabled,
+    );
+    expect(
+      PrintlyErrorCode.locationServicesDisabled.wireName,
+      'location_services_disabled',
+    );
   });
 
   test('adapterState decodes integer events into enum values', () async {
@@ -152,48 +208,68 @@ void main() {
 
     expect(received, hasLength(2));
     expect(received[0].address, 'AA:BB:CC:DD:EE:FF');
-    expect(received[0].type, ConnectionType.ble);
+    expect(received[0].availableTransports, <ConnectionType>{
+      ConnectionType.ble,
+    });
     expect(received[0].name, 'Printer');
     expect(received[0].rssi, -55);
     expect(received[0].isBonded, isTrue);
-    expect(received[1].type, ConnectionType.classic);
+    expect(received[1].availableTransports, <ConnectionType>{
+      ConnectionType.classic,
+    });
 
     await subscription.cancel();
   });
 
-  test('connect forwards device payload and timeout', () async {
-    const PrintlyDevice device = PrintlyDevice(
+  test('connect forwards device payload, transport, and timeout', () async {
+    final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
-      type: ConnectionType.ble,
+      availableTransports: <ConnectionType>{ConnectionType.ble},
       name: 'Printer',
     );
-    await platform.connect(device: device, timeout: const Duration(seconds: 5));
+    await platform.connect(
+      device: device,
+      transport: ConnectionType.ble,
+      timeout: const Duration(seconds: 5),
+    );
     expect(invokedMethod, 'connect');
     final Map<Object?, Object?> args =
         invocations.single.arguments as Map<Object?, Object?>;
     expect(args['timeoutMs'], 5000);
     expect((args['device'] as Map<Object?, Object?>)['address'], 'AA:BB');
+    expect(
+      (args['device'] as Map<Object?, Object?>)['type'],
+      ConnectionType.ble.wireCode,
+    );
   });
 
-  test('disconnect forwards device payload', () async {
-    const PrintlyDevice device = PrintlyDevice(
+  test('disconnect forwards device payload and transport', () async {
+    final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
-      type: ConnectionType.ble,
+      availableTransports: <ConnectionType>{ConnectionType.ble},
     );
-    await platform.disconnect(device: device);
+    await platform.disconnect(device: device, transport: ConnectionType.ble);
     expect(invokedMethod, 'disconnect');
     final Map<Object?, Object?> args =
         invocations.single.arguments as Map<Object?, Object?>;
     expect((args['device'] as Map<Object?, Object?>)['address'], 'AA:BB');
+    expect(
+      (args['device'] as Map<Object?, Object?>)['type'],
+      ConnectionType.ble.wireCode,
+    );
   });
 
-  test('write forwards device payload and bytes', () async {
-    const PrintlyDevice device = PrintlyDevice(
+  test('write forwards device payload, transport, and bytes', () async {
+    final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
-      type: ConnectionType.classic,
+      availableTransports: <ConnectionType>{ConnectionType.classic},
     );
     final Uint8List bytes = Uint8List.fromList(<int>[0x1B, 0x40, 0x41]);
-    await platform.write(device: device, bytes: bytes);
+    await platform.write(
+      device: device,
+      transport: ConnectionType.classic,
+      bytes: bytes,
+    );
     expect(invokedMethod, 'write');
     final Map<Object?, Object?> args =
         invocations.single.arguments as Map<Object?, Object?>;
@@ -205,6 +281,45 @@ void main() {
     expect(args['bytes'], <int>[0x1B, 0x40, 0x41]);
   });
 
+  test(
+    'connect/disconnect/write send the SAME transport type for a dual-mode '
+    'device — the native side keys sessions by `type:address`, so a '
+    'mismatch across the three calls would silently miss the session',
+    () async {
+      final PrintlyDevice device = PrintlyDevice(
+        address: 'AA:BB',
+        availableTransports: <ConnectionType>{
+          ConnectionType.classic,
+          ConnectionType.ble,
+        },
+        name: 'Dual',
+      );
+      await platform.connect(
+        device: device,
+        transport: ConnectionType.ble,
+        timeout: const Duration(seconds: 5),
+      );
+      await platform.disconnect(device: device, transport: ConnectionType.ble);
+      await platform.write(
+        device: device,
+        transport: ConnectionType.ble,
+        bytes: Uint8List.fromList(<int>[1]),
+      );
+
+      expect(invocations, hasLength(3));
+      expect(invocations[0].method, 'connect');
+      expect(invocations[1].method, 'disconnect');
+      expect(invocations[2].method, 'write');
+      for (final MethodCall call in invocations) {
+        final Map<Object?, Object?> args =
+            call.arguments as Map<Object?, Object?>;
+        final Map<Object?, Object?> deviceMap =
+            args['device'] as Map<Object?, Object?>;
+        expect(deviceMap['type'], ConnectionType.ble.wireCode);
+      }
+    },
+  );
+
   group('typed error mapping', () {
     void throwOnInvoke(String code, String? message) {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -213,9 +328,9 @@ void main() {
           });
     }
 
-    const PrintlyDevice device = PrintlyDevice(
+    final PrintlyDevice device = PrintlyDevice(
       address: 'AA:BB',
-      type: ConnectionType.ble,
+      availableTransports: <ConnectionType>{ConnectionType.ble},
     );
 
     test('startScan maps the specific message over the generic code', () async {
@@ -232,6 +347,25 @@ void main() {
       );
     });
 
+    test(
+      'startScan surfaces location_services_disabled as a typed scan error',
+      () async {
+        throwOnInvoke('start_scan_failed', 'location_services_disabled');
+        await expectLater(
+          platform.startScan(
+            types: const <ConnectionType>{ConnectionType.classic},
+          ),
+          throwsA(
+            isA<PrintlyScanException>().having(
+              (PrintlyScanException e) => e.code,
+              'code',
+              PrintlyErrorCode.locationServicesDisabled,
+            ),
+          ),
+        );
+      },
+    );
+
     test('permission failures map to PrintlyPermissionException', () async {
       throwOnInvoke('permission_denied', 'bluetooth_scan_denied');
       await expectLater(
@@ -243,7 +377,11 @@ void main() {
     test('write maps write_timeout even when the code is generic', () async {
       throwOnInvoke('write_failed', 'write_timeout');
       await expectLater(
-        platform.write(device: device, bytes: Uint8List.fromList(<int>[1])),
+        platform.write(
+          device: device,
+          transport: ConnectionType.ble,
+          bytes: Uint8List.fromList(<int>[1]),
+        ),
         throwsA(
           isA<PrintlyWriteException>().having(
             (PrintlyWriteException e) => e.code,
@@ -258,7 +396,11 @@ void main() {
         'PrintlyUnsupportedException', () async {
       throwOnInvoke('unsupported_platform', 'ios write ships in sprint 6');
       await expectLater(
-        platform.write(device: device, bytes: Uint8List.fromList(<int>[1])),
+        platform.write(
+          device: device,
+          transport: ConnectionType.ble,
+          bytes: Uint8List.fromList(<int>[1]),
+        ),
         throwsA(isA<PrintlyUnsupportedException>()),
       );
     });
@@ -266,7 +408,7 @@ void main() {
     test('unclassifiable errors keep the raw message under unknown', () async {
       throwOnInvoke('something_new', 'exotic native failure');
       await expectLater(
-        platform.connect(device: device),
+        platform.connect(device: device, transport: ConnectionType.ble),
         throwsA(
           isA<PrintlyConnectionException>()
               .having(

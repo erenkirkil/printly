@@ -6,9 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const PrintlyDevice sampleDevice = PrintlyDevice(
+  final PrintlyDevice sampleDevice = PrintlyDevice(
     address: 'AA:BB:CC:DD:EE:FF',
-    type: ConnectionType.ble,
+    availableTransports: <ConnectionType>{ConnectionType.ble},
     name: 'Printer',
   );
 
@@ -22,7 +22,11 @@ void main() {
 
     await store.writeDevice(sampleDevice);
     final LastDeviceStore reopened = await LastDeviceStore.open();
-    expect(reopened.readDevice(), sampleDevice);
+    final PrintlyDevice? roundTripped = reopened.readDevice();
+    expect(roundTripped, sampleDevice);
+    // Equality is address-only (C1) — assert the field round-trips too, or
+    // a silently-dropped `availableTransports` would pass this test.
+    expect(roundTripped!.availableTransports, sampleDevice.availableTransports);
   });
 
   test('writeDevice(null) clears the persisted value', () async {
@@ -39,6 +43,23 @@ void main() {
     final LastDeviceStore store = await LastDeviceStore.open();
     expect(store.readDevice(), isNull);
   });
+
+  test(
+    'readDevice migrates a 0.1.x persisted device (single "type" int)',
+    () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'printly.last_connected_device':
+            '{"address":"AA:BB:CC:DD:EE:FF","type":0,"name":"PTP-II"}',
+      });
+      final LastDeviceStore store = await LastDeviceStore.open();
+      final PrintlyDevice? migrated = store.readDevice();
+      expect(migrated, isNotNull);
+      expect(migrated!.availableTransports, <ConnectionType>{
+        ConnectionType.classic,
+      });
+      expect(migrated.name, 'PTP-II');
+    },
+  );
 
   test('auto-reconnect flag round-trips', () async {
     final LastDeviceStore store = await LastDeviceStore.open();
