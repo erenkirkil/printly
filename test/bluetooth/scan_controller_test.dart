@@ -797,6 +797,106 @@ void main() {
     });
   });
 
+  group('meaningful-change emissions (field perf finding)', () {
+    // In a 140-device environment every re-advertisement (usually only the
+    // RSSI moved) re-emitted the full list 4x/second, forcing consumers to
+    // write their own diff just to silence state churn.
+    test('an RSSI-only re-advertisement does not re-emit the list, but the '
+        'snapshot still refreshes', () async {
+      await controller.startScan();
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          rssi: -70,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      final List<List<PrintlyDevice>> emissions = <List<PrintlyDevice>>[];
+      final StreamSubscription<List<PrintlyDevice>> sub = controller
+          .devicesStream
+          .listen(emissions.add);
+      addTearDown(sub.cancel);
+      await pumpEventQueue();
+      final int baseline = emissions.length;
+
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          rssi: -42,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(emissions.length, baseline, reason: 'only the RSSI moved');
+      expect(
+        controller.currentDevices.single.rssi,
+        -42,
+        reason: 'the synchronous snapshot must stay live',
+      );
+    });
+
+    test('a meaningful change (seenInScan flip, new transport, new device) '
+        'still emits', () async {
+      await controller.startScan();
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          isBonded: true,
+          seenInScan: false,
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+
+      final List<List<PrintlyDevice>> emissions = <List<PrintlyDevice>>[];
+      final StreamSubscription<List<PrintlyDevice>> sub = controller
+          .devicesStream
+          .listen(emissions.add);
+      addTearDown(sub.cancel);
+      await pumpEventQueue();
+      final int baseline = emissions.length;
+
+      // Bonded seed confirmed by a real sighting: seenInScan flips.
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          isBonded: true,
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+      expect(emissions.length, baseline + 1, reason: 'seenInScan flipped');
+
+      // Dual-mode radio: BLE transport joins the record.
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+      expect(emissions.length, baseline + 2, reason: 'transport set grew');
+
+      platform.emit(
+        PrintlyDevice(
+          address: 'CC:DD',
+          name: 'Second printer',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+      expect(emissions.length, baseline + 3, reason: 'new device');
+    });
+  });
+
   group('post-stop late results (field bug)', () {
     // Android's BluetoothLeScanner.stopScan() is asynchronous: results
     // buffered on the event channel keep arriving AFTER the controller has

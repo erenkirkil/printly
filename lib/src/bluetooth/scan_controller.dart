@@ -177,7 +177,12 @@ class ScanController {
 
   /// Synchronous snapshot of the current device list — handy for state
   /// management integrations that want an initial value without subscribing.
-  List<PrintlyDevice> get currentDevices => _devicesSubject.value;
+  /// Read from the live dedup map, not the last stream emission: RSSI-only
+  /// refreshes deliberately do not re-emit on [devicesStream] (see
+  /// [_flushEmit]), so the subject's value can lag on signal strength. This
+  /// snapshot never does.
+  List<PrintlyDevice> get currentDevices =>
+      List<PrintlyDevice>.unmodifiable(_dedup.values);
 
   /// Synchronous snapshot of [isScanningStream].
   bool get isScanning => _isScanningSubject.value;
@@ -506,7 +511,41 @@ class ScanController {
   void _flushEmit() {
     _emitTimer = null;
     if (_disposed) return;
-    _devicesSubject.add(List<PrintlyDevice>.unmodifiable(_dedup.values));
+    final List<PrintlyDevice> next = List<PrintlyDevice>.unmodifiable(
+      _dedup.values,
+    );
+    // Skip emissions that would only refresh RSSI. In a 140-device
+    // environment every re-advertisement re-emitted the full list 4x/s and
+    // consumers ended up writing their own diff just to silence state
+    // churn. Identity, name, bonding, seenInScan or transport changes all
+    // still emit; the freshest RSSI is always available synchronously via
+    // [currentDevices], and the final post-stop flush in [_runStop] bypasses
+    // this check entirely.
+    if (_sameMeaningfully(next, _devicesSubject.value)) return;
+    _devicesSubject.add(next);
+  }
+
+  /// Whether [next] differs from [previous] in anything a list UI renders —
+  /// everything except [PrintlyDevice.rssi]. Order-sensitive by design:
+  /// [_dedup] preserves insertion order, so a reorder implies a rebuild.
+  static bool _sameMeaningfully(
+    List<PrintlyDevice> next,
+    List<PrintlyDevice> previous,
+  ) {
+    if (next.length != previous.length) return false;
+    for (int i = 0; i < next.length; i++) {
+      final PrintlyDevice a = next[i];
+      final PrintlyDevice b = previous[i];
+      if (a.address != b.address ||
+          a.name != b.name ||
+          a.isBonded != b.isBonded ||
+          a.seenInScan != b.seenInScan ||
+          a.availableTransports.length != b.availableTransports.length ||
+          !a.availableTransports.containsAll(b.availableTransports)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void _onScanError(Object error, StackTrace stack) {

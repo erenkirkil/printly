@@ -23,6 +23,15 @@
   (Android; on iOS the address is a per-phone CoreBluetooth UUID that must
   come from a previous scan).
 
+### Changed
+
+- `devicesStream` no longer re-emits the full list when only RSSI values
+  moved. In a 140-device environment every re-advertisement re-emitted
+  4×/second and consumers ended up diffing the list themselves just to
+  silence state churn. Identity, name, bonding, `seenInScan` and transport
+  changes still emit; `ScanController.currentDevices` now reads the live
+  dedup map, so the freshest RSSI is always available synchronously.
+
 ### Fixed
 
 - `devicesStream` no longer keeps emitting after `stopScan()` has completed.
