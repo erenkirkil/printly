@@ -71,6 +71,14 @@ class SettingsTab extends StatelessWidget {
               label: const Text('Request Bluetooth permissions'),
             ),
             const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: bluetooth.isPoweredOn
+                  ? null
+                  : bluetooth.requestEnableBluetooth,
+              icon: const Icon(Icons.bluetooth_disabled),
+              label: const Text('Turn on Bluetooth'),
+            ),
+            const SizedBox(height: 8),
             Row(
               children: <Widget>[
                 Expanded(
