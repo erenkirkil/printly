@@ -52,6 +52,13 @@ abstract final class WireProtocol {
   /// Writes the bytes in [keyBytes] to the device in [keyDevice].
   static const String mWrite = 'write';
 
+  /// Whether the OS location service is enabled (Android below API 31 needs it
+  /// for scanning; `true` elsewhere).
+  static const String mIsLocationServiceEnabled = 'isLocationServiceEnabled';
+
+  /// Opens the system location settings page (Android only).
+  static const String mOpenLocationSettings = 'openLocationSettings';
+
   // Payload keys ---------------------------------------------------------
 
   /// A serialised device map (see `PrintlyDevice.toJson`).

@@ -115,6 +115,33 @@ class MethodChannelPrintly extends PrintlyPlatform {
   }
 
   @override
+  Future<bool> isLocationServiceEnabled() async {
+    // Same reasoning as [requestEnableBluetooth]: needs both a bool unwrap
+    // and error mapping, so it does not go through the void-typed
+    // [_mapErrors] helper.
+    try {
+      final bool? satisfied = await methodChannel.invokeMethod<bool>(
+        WireProtocol.mIsLocationServiceEnabled,
+      );
+      return satisfied ?? true;
+    } on PlatformException catch (error) {
+      throw _toPrintlyException(error, _ErrorDomain.scan);
+    }
+  }
+
+  @override
+  Future<bool> openLocationSettings() async {
+    try {
+      final bool? opened = await methodChannel.invokeMethod<bool>(
+        WireProtocol.mOpenLocationSettings,
+      );
+      return opened ?? false;
+    } on PlatformException catch (error) {
+      throw _toPrintlyException(error, _ErrorDomain.scan);
+    }
+  }
+
+  @override
   Future<void> startScan({required Set<ConnectionType> types}) {
     return _mapErrors(_ErrorDomain.scan, () async {
       await methodChannel

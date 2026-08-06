@@ -48,6 +48,8 @@ internal object WireCodes {
         const val CONNECT = "connect"
         const val DISCONNECT = "disconnect"
         const val WRITE = "write"
+        const val IS_LOCATION_SERVICE_ENABLED = "isLocationServiceEnabled"
+        const val OPEN_LOCATION_SETTINGS = "openLocationSettings"
     }
 
     /** Payload map keys — mirrors `WireProtocol.key*` constants. */
@@ -86,5 +88,6 @@ internal object WireCodes {
         const val WRITE_FAILED = "write_failed"
         const val NETWORK_NOT_SUPPORTED = "network_not_supported"
         const val UNSUPPORTED_PLATFORM = "unsupported_platform"
+        const val LOCATION_SERVICES_DISABLED = "location_services_disabled"
     }
 }

@@ -235,6 +235,39 @@ class Printly {
     return PrintlyPlatform.instance.requestEnableBluetooth();
   }
 
+  /// Whether the OS location service currently gates Bluetooth scanning on
+  /// this device.
+  ///
+  /// This is **not** the same thing as the location *permission*. On Android
+  /// below API 31, both Classic inquiry and BLE scanning silently return no
+  /// results — with no error from the platform — when the location
+  /// *service* is off, even if the location permission was granted. A scan
+  /// in that state looks exactly like an empty room. [startScan] checks this
+  /// itself and rejects with [PrintlyErrorCode.locationServicesDisabled]
+  /// instead of scanning blind, so most callers do not need to call this
+  /// directly — it is exposed for apps that want to check and route the user
+  /// proactively, e.g. before showing a "scan" button.
+  ///
+  /// From API 31, printly declares `BLUETOOTH_SCAN` with the
+  /// `neverForLocation` flag, which removes the dependency on the location
+  /// service entirely — this always returns `true` there. iOS never depends
+  /// on the location service for Bluetooth scanning either, so this always
+  /// returns `true` on iOS.
+  Future<bool> isLocationServiceEnabled() {
+    return PrintlyPlatform.instance.isLocationServiceEnabled();
+  }
+
+  /// Opens the system location settings page so the user can turn the
+  /// location service on.
+  ///
+  /// Android only, via `Settings.ACTION_LOCATION_SOURCE_SETTINGS`. Returns
+  /// `false` as a no-op on iOS — this SDK does not touch CoreLocation, since
+  /// creating a location manager would raise a permission question printly
+  /// has no business asking.
+  Future<bool> openLocationSettings() {
+    return PrintlyPlatform.instance.openLocationSettings();
+  }
+
   /// Opens this application's system settings page so the user can review
   /// or change granted permissions. Delegates to
   /// [ph.openAppSettings].

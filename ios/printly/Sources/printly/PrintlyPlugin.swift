@@ -88,6 +88,13 @@ public class PrintlyPlugin: NSObject, FlutterPlugin {
             handleDisconnect(call: call, result: result)
         case WireCodes.Methods.write:
             handleWrite(call: call, result: result)
+        case WireCodes.Methods.isLocationServiceEnabled:
+            // iOS never gates Bluetooth scanning on location services, and
+            // printly does not touch CoreLocation (creating a manager would
+            // raise a permission question this package has no business asking).
+            result(true)
+        case WireCodes.Methods.openLocationSettings:
+            result(false)
         default:
             result(FlutterMethodNotImplemented)
         }

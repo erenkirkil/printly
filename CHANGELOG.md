@@ -1,3 +1,21 @@
+## Unreleased
+
+### Added
+
+- `Printly.instance.isLocationServiceEnabled()` — whether the OS location
+  service currently gates Bluetooth scanning on this device. Always `true`
+  on iOS and on Android API 31+ (printly declares `BLUETOOTH_SCAN` with
+  `neverForLocation`, which removes the dependency).
+- `Printly.instance.openLocationSettings()` — opens the system location
+  settings page (Android only; a no-op returning `false` on iOS).
+
+### Fixed
+
+- Android below API 31: starting a scan while the location *service* is off
+  (even with the location *permission* granted) used to return no results
+  and no error — the scan looked like an empty room. `startScan()` now
+  rejects immediately with `PrintlyScanException(locationServicesDisabled)`.
+
 ## 0.2.0
 
 Merges Classic/BLE sightings of one printer into a single `PrintlyDevice`

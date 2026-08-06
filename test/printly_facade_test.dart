@@ -20,6 +20,10 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   final List<PrintlyDevice> connectDevices = <PrintlyDevice>[];
   int requestEnableBluetoothCalls = 0;
   bool requestEnableBluetoothResult = true;
+  int isLocationServiceEnabledCalls = 0;
+  bool isLocationServiceEnabledResult = true;
+  int openLocationSettingsCalls = 0;
+  bool openLocationSettingsResult = true;
   int writeCalls = 0;
   ConnectionType? lastWriteTransport;
 
@@ -58,6 +62,18 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   Future<bool> requestEnableBluetooth() async {
     requestEnableBluetoothCalls++;
     return requestEnableBluetoothResult;
+  }
+
+  @override
+  Future<bool> isLocationServiceEnabled() async {
+    isLocationServiceEnabledCalls++;
+    return isLocationServiceEnabledResult;
+  }
+
+  @override
+  Future<bool> openLocationSettings() async {
+    openLocationSettingsCalls++;
+    return openLocationSettingsResult;
   }
 
   @override
@@ -256,6 +272,26 @@ void main() {
 
       expect(await printly.requestEnableBluetooth(), isFalse);
       expect(platform.requestEnableBluetoothCalls, 1);
+    });
+  });
+
+  group('isLocationServiceEnabled', () {
+    test('delegates to the platform and returns its flag', () async {
+      final Printly printly = Printly.forTesting();
+      platform.isLocationServiceEnabledResult = false;
+
+      expect(await printly.isLocationServiceEnabled(), isFalse);
+      expect(platform.isLocationServiceEnabledCalls, 1);
+    });
+  });
+
+  group('openLocationSettings', () {
+    test('delegates to the platform and returns its flag', () async {
+      final Printly printly = Printly.forTesting();
+      platform.openLocationSettingsResult = true;
+
+      expect(await printly.openLocationSettings(), isTrue);
+      expect(platform.openLocationSettingsCalls, 1);
     });
   });
 
