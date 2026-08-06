@@ -1,0 +1,68 @@
+name: New Printer Test
+description: Report how printly behaves with a printer model we haven't verified — works or not, both are valuable
+title: "[printer-test] "
+labels: ["new-printer-test"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        printly targets **generic ESC/POS support** — every report widens the
+        verified-hardware matrix in the README, and quirky firmware findings
+        get documented by name. Run the example app against your printer and
+        tell us what happened. A photo of a garbled receipt is as useful as a
+        success report.
+  - type: input
+    id: printer-model
+    attributes:
+      label: Printer model
+      placeholder: "Cashino PTP-II · 58 mm"
+    validations:
+      required: true
+  - type: dropdown
+    id: transports
+    attributes:
+      label: Transports the printer advertises
+      multiple: true
+      options:
+        - Bluetooth Classic (SPP)
+        - BLE
+        - USB
+        - Network
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Test host
+      description: Phone/POS model and OS version, printly version
+      placeholder: "Samsung A52, Android 12 · printly 0.2.0"
+    validations:
+      required: true
+  - type: checkboxes
+    id: matrix
+    attributes:
+      label: What worked?
+      description: Check everything you tried successfully
+      options:
+        - label: Appears in scan (with its name)
+        - label: Connect (Classic)
+        - label: Connect (BLE)
+        - label: Plain text prints
+        - label: Turkish text prints correctly (ğ ı ş İ Ö ü)
+        - label: QR code prints and scans
+        - label: Barcode prints and scans
+        - label: Raster / image prints
+        - label: Cut works (if the printer has a cutter)
+  - type: textarea
+    id: findings
+    attributes:
+      label: Findings and quirks
+      description: |
+        Anything odd: ignores `ESC t`, feeds paper instead of cutting, faint
+        raster output, drops the link mid-print, needs a specific transport…
+      placeholder: "Turkish text printed as CP437 garbage over ESC t — raster path printed it correctly."
+  - type: textarea
+    id: photos
+    attributes:
+      label: Receipt photos
+      description: Drag & drop photos of the printed output if you can
