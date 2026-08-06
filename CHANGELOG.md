@@ -124,6 +124,12 @@ state from permission state, and fixes an Android BLE GATT discovery race.
   results and no error, so the scan looked like an empty room. `startScan()`
   now rejects immediately with
   `PrintlyScanException(PrintlyErrorCode.locationServicesDisabled)`.
+- **A disconnect that lands mid-connect now explains itself** — the bare wire
+  reason (`disconnected`) was accurate but actionless for a genuinely
+  ambiguous failure: the radio links up and the peer closes it cleanly.
+  `PrintlyErrorCode.disconnected` now names the plausible causes (printer
+  already connected elsewhere, out of range, or refusing that transport) and
+  points at `connect(transport:)`.
 - **Blank advertised names no longer clobber a known name during merge** — a
   whitespace-only BLE advertisement (real hardware behavior) must not flip
   `hasName` to `false` and trigger UI fallback to "(unnamed)" or a spurious
