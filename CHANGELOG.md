@@ -1,4 +1,4 @@
-## 0.2.0
+## 0.2.0 — 2026-08-06
 
 Merges Classic/BLE sightings of one printer into a single `PrintlyDevice`
 with transport selection moved to `connect()`, adds QR/barcode Unicode
