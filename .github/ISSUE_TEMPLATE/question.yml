@@ -1,0 +1,12 @@
+name: Question
+description: Usage question or open-ended discussion
+title: "[question] "
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What are you trying to achieve, and what have you tried? Code snippets and printer models help.
+    validations:
+      required: true

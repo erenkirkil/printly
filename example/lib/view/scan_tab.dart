@@ -52,7 +52,9 @@ class ScanTab extends StatelessWidget {
               onChanged: (bool v) => scan.namedOnly = v,
               title: const Text('Named devices only'),
               subtitle: Text(
-                'Showing ${scan.visibleDevices.length} of ${scan.devices.length}',
+                'Showing ${scan.visibleDevices.length} of '
+                '${scan.devices.length} · filters natively from the '
+                'next scan',
               ),
             ),
             const SizedBox(height: 16),
