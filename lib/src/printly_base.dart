@@ -460,8 +460,9 @@ class Printly {
   /// [PrintlyErrorCode.writeBusy] (previous write still in flight),
   /// [PrintlyErrorCode.writeTimeout] (printer stopped acknowledging —
   /// usually worth a reconnect + retry), [PrintlyErrorCode.disconnected],
-  /// or [PrintlyErrorCode.writeFailed]. On iOS printing ships in a later
-  /// release and currently rejects with a [PrintlyUnsupportedException].
+  /// or [PrintlyErrorCode.writeFailed]. Supported on both platforms:
+  /// Android writes over Classic RFCOMM or BLE GATT, iOS over BLE
+  /// (hardware-verified since 0.1.0).
   Future<void> print(PrintlyDevice device, PrintJob job) {
     // The write must travel over the same transport the active (or last)
     // connect() used — the native side keys the session by `type:address`.
