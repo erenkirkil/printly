@@ -1,3 +1,7 @@
+// The last-device persistence cluster is deprecated (removal lands in
+// v1.0.0) but must stay covered until it is actually deleted.
+// ignore_for_file: deprecated_member_use_from_same_package
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';

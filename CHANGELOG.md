@@ -23,6 +23,17 @@
   (Android; on iOS the address is a per-phone CoreBluetooth UUID that must
   come from a previous scan).
 
+### Deprecated
+
+- The last-device persistence cluster — `loadLastConnectedDevice()`,
+  `lastConnectedDevice`, `forgetLastConnectedDevice()`,
+  `reconnectLastDevice()`, `enableAutoReconnect()`,
+  `isAutoReconnectEnabled` — is deprecated and will be removed in v1.0.0
+  together with the `shared_preferences` dependency. Persisting the printer
+  is an app concern: store the address and transport with your own storage
+  and reconstruct the device via the public `PrintlyDevice` constructor —
+  see the README section "Connecting without scanning (known address)".
+
 ### Changed
 
 - `devicesStream` no longer re-emits the full list when only RSSI values
