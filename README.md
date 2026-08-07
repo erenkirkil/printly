@@ -204,6 +204,17 @@ are never filtered (their name can arrive in a later inquiry broadcast),
 and neither are nameless re-sightings of devices already on the list, so
 RSSI keeps refreshing.
 
+**"My printer doesn't show up in the list."** Some printers simply never
+advertise a name over BLE. That's exactly what `includeUnnamed: true`
+above is for — pass it and the printer appears, identified by `address`
+instead of `name` (build your own fallback label, e.g. `device.name ??
+device.address`). Two platform notes:
+- **Android:** if you already know the printer's MAC, you can skip
+  discovery entirely — see "Connecting without scanning" below.
+- **iOS:** CoreBluetooth never exposes a MAC, only a per-phone UUID learned
+  from a scan — so `includeUnnamed: true` is the *only* way to reach a
+  nameless printer there, at least once, to learn its address.
+
 **The bonded-seed trap.** On Android, Classic discovery seeds `devicesStream`
 from the OS bond cache *before* any inquiry result arrives, so a printer you
 paired months ago (and that may not even be powered on) can appear
@@ -344,7 +355,32 @@ No manifest changes needed — the plugin declares the Bluetooth permissions
    use the BLE transport on iOS. Most cheap 58 mm printers are dual-mode —
    they appear as Classic on Android and expose a BLE mode that iOS can see.
 
-## Migrating from 0.1.x
+## Migrating between versions
+
+### 0.2.x → 0.3.0
+
+- `startScan()` (and `PrintlyScanSession.start()`) now default to
+  **`includeUnnamed: false`** — nameless BLE advertisements no longer
+  appear in `devicesStream`. If your printer never advertises a name (see
+  "My printer doesn't show up in the list" above), pass `includeUnnamed:
+  true` explicitly. Custom `PrintlyPlatform` implementations must add the
+  new parameter to their `startScan()` override.
+- `devicesStream` no longer re-emits the full list on an RSSI-only change.
+  If you relied on every RSSI tick producing a stream event (e.g. a live
+  signal-strength indicator), read `Printly.instance` /
+  `ScanController.currentDevices` instead, which always reflects the
+  latest RSSI synchronously.
+- The last-device persistence cluster —
+  `loadLastConnectedDevice()`/`lastConnectedDevice`/
+  `forgetLastConnectedDevice()`/`reconnectLastDevice()`/
+  `enableAutoReconnect()`/`isAutoReconnectEnabled` — is **deprecated**
+  (compiler warning, still functional) and is removed in 1.0.0 together
+  with the `shared_preferences` dependency. Persist the address and
+  transport with your own storage and reconstruct the device via the
+  public `PrintlyDevice` constructor — see "Connecting without scanning"
+  below.
+
+### 0.1.x → 0.2.0
 
 `0.2.0` merges each physical radio into a single `PrintlyDevice` and moves
 transport selection into `connect()`:
