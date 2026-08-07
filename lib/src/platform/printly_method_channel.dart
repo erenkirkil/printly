@@ -142,13 +142,17 @@ class MethodChannelPrintly extends PrintlyPlatform {
   }
 
   @override
-  Future<void> startScan({required Set<ConnectionType> types}) {
+  Future<void> startScan({
+    required Set<ConnectionType> types,
+    bool includeUnnamed = false,
+  }) {
     return _mapErrors(_ErrorDomain.scan, () async {
       await methodChannel
           .invokeMethod<void>(WireProtocol.mStartScan, <String, Object?>{
             WireProtocol.keyTypes: types
                 .map((ConnectionType t) => t.wireCode)
                 .toList(),
+            WireProtocol.keyIncludeUnnamed: includeUnnamed,
           });
     });
   }

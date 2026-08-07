@@ -74,6 +74,7 @@ extension WireCodes {
         static let device = "device"
         static let timeoutMs = "timeoutMs"
         static let types = "types"
+        static let includeUnnamed = "includeUnnamed"
         static let bytes = "bytes"
         static let address = "address"
         static let type = "type"

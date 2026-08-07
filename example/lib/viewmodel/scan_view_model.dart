@@ -28,8 +28,13 @@ class ScanViewModel extends ChangeNotifier {
   /// Every discovered device, unfiltered.
   List<PrintlyDevice> get devices => _devices;
 
-  /// Scans surface many unnamed BLE beacons/peripherals; printers advertise a
-  /// name, so hiding the unnamed noise keeps the list short and the UI smooth.
+  /// Since 0.3.0 the heavy lifting happens in the SDK: [toggleScan] passes
+  /// `includeUnnamed: !namedOnly` to `startScan()`, so in named-only mode
+  /// nameless BLE advertisements are dropped natively and never even cross
+  /// the platform channel. The residual UI filter below only hides nameless
+  /// *Classic* sightings (which the SDK deliberately lets through — their
+  /// name can arrive in a later inquiry broadcast) and anything discovered
+  /// before the toggle was flipped.
   List<PrintlyDevice> get visibleDevices => _namedOnly
       ? _devices
             .where((PrintlyDevice d) => (d.name ?? '').isNotEmpty)
@@ -39,6 +44,14 @@ class ScanViewModel extends ChangeNotifier {
   set namedOnly(bool value) {
     if (_namedOnly == value) return;
     _namedOnly = value;
+    if (_scanning) {
+      // The native filter is fixed per scan; the wire value is only sent on
+      // startScan. Say so instead of letting the toggle look broken.
+      _log.success(
+        'named-only → ${value ? 'on' : 'off'} (native filter '
+        'applies from the next scan)',
+      );
+    }
     notifyListeners();
   }
 
@@ -90,8 +103,8 @@ class ScanViewModel extends ChangeNotifier {
           return;
         }
         Printly.instance.clearDevices();
-        await Printly.instance.startScan();
-        _log.success('startScan → ok');
+        await Printly.instance.startScan(includeUnnamed: !_namedOnly);
+        _log.success('startScan → ok (includeUnnamed=${!_namedOnly})');
       }
     } catch (error) {
       _log.failure('scan error → $error');

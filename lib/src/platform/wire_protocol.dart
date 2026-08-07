@@ -70,6 +70,13 @@ abstract final class WireProtocol {
   /// Transport wire codes to scan (List of int).
   static const String keyTypes = 'types';
 
+  /// Whether the native scan should report nameless BLE advertisements
+  /// (bool; absent means false). Nameless results are overwhelmingly
+  /// privacy-rotated phones/wearables/beacons — a thermal printer must
+  /// advertise its name to be pickable — so they are filtered natively by
+  /// default instead of crossing the channel only to be discarded.
+  static const String keyIncludeUnnamed = 'includeUnnamed';
+
   /// Print payload (Uint8List).
   static const String keyBytes = 'bytes';
 

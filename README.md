@@ -194,6 +194,16 @@ await printly.startScan(timeout: const Duration(seconds: 20));
 printly.defaultScanTimeout = const Duration(seconds: 20); // app-wide default
 ```
 
+**Nameless devices are hidden by default (0.3.0).** In one office scan, 135
+of 141 BLE records were nameless privacy-rotated phones, wearables and
+beacons — noise no picker can present. `startScan()` therefore drops
+nameless BLE advertisements natively, before they ever cross the platform
+channel. Pass `includeUnnamed: true` (also on `PrintlyScanSession.start()`)
+for diagnostic UIs that must see everything. Nameless *Classic* sightings
+are never filtered (their name can arrive in a later inquiry broadcast),
+and neither are nameless re-sightings of devices already on the list, so
+RSSI keeps refreshing.
+
 **The bonded-seed trap.** On Android, Classic discovery seeds `devicesStream`
 from the OS bond cache *before* any inquiry result arrives, so a printer you
 paired months ago (and that may not even be powered on) can appear
@@ -225,11 +235,24 @@ drop the location-service requirement) or to iOS — on both,
 `isLocationServiceEnabled()` always returns `true` and `openLocationSettings()`
 is a no-op that returns `false`.
 
-Pass `strategy: ScanStrategy.classicFirst` to scan Bluetooth Classic first on
-Android and fall back to a single BLE round only if nothing named answered,
-instead of requesting both transports at once — a Classic inquiry saturates
-the radio, so a parallel scan can miss BLE-only printers under contention.
-It degrades silently to a single BLE round on iOS.
+**Classic printers and the scan timeout.** Android's Classic inquiry cycle
+takes ~12.8 s end to end; the 10 s default window can cut it short, so a
+Classic-only printer that answers late in the cycle may be missed. In
+Classic-heavy environments, give the inquiry room to finish:
+
+```dart
+printly.defaultScanTimeout = const Duration(seconds: 15);
+```
+
+`ScanStrategy.classicFirst` (opt-in, experimental) scans Classic first on
+Android and falls back to a single BLE round only if nothing named answered —
+the idea being that a Classic inquiry saturates the radio and a parallel scan
+can miss BLE-only printers under contention. **Field data has not yet shown
+round 1 confirming a device** (see the timeout note above — the round-1
+window structurally undercuts the inquiry cycle), so prefer the default
+`parallel` strategy unless you have measured a benefit on your hardware;
+reports welcome via the "New Printer Test" issue template. It degrades
+silently to a single BLE round on iOS.
 
 For screen-scoped scanning (e.g. a "pick a printer" dialog), use
 `newScanSession()` instead of the process-lifetime `devicesStream`/
@@ -255,6 +278,32 @@ class _PrinterPickerState extends State<PrinterPicker> {
   // build(): StreamBuilder on _session.devices / _session.isScanning
 }
 ```
+
+### Connecting without scanning (known address)
+
+Scanning is a discovery affordance, not a requirement. If you already know
+the printer's MAC address — a fixed fleet, a QR label on the device, an
+address stored by your own app — construct the `PrintlyDevice` yourself and
+connect directly:
+
+```dart
+const printer = PrintlyDevice(
+  address: 'DC:0D:30:12:34:56',
+  availableTransports: {ConnectionType.classic}, // or {ConnectionType.ble}
+);
+await printly.connect(printer);
+```
+
+This skips the scan entirely: no location-service gate, no 10-second wait,
+no list to pick from. It also composes into a "remember my printer" flow —
+persist `address` and the transport with whatever storage your app already
+uses, rebuild the device on startup, connect.
+
+**iOS caveat:** on iOS the `address` is not a MAC — CoreBluetooth hides MAC
+addresses and identifies peripherals by a per-phone UUID that can only be
+learned from a scan. Direct-address connect is therefore an Android
+technique; on iOS, store the UUID your app observed in a previous scan of
+that same phone, or scan again.
 
 ## Platform setup
 

@@ -16,17 +16,24 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   Set<ConnectionType>? lastTypes;
   final List<Set<ConnectionType>> typesCalls = <Set<ConnectionType>>[];
   Completer<void>? startCompleter;
+  Completer<void>? stopCompleter;
   Object? startError;
   Object? startErrorOnCall;
 
   @override
   Stream<PrintlyDevice> get scanResults => _resultsController.stream;
 
+  final List<bool> includeUnnamedCalls = <bool>[];
+
   @override
-  Future<void> startScan({required Set<ConnectionType> types}) async {
+  Future<void> startScan({
+    required Set<ConnectionType> types,
+    bool includeUnnamed = false,
+  }) async {
     startScanCalls++;
     lastTypes = types;
     typesCalls.add(types);
+    includeUnnamedCalls.add(includeUnnamed);
     if (startCompleter != null) await startCompleter!.future;
     if (startErrorOnCall != null && startScanCalls == 2) {
       throw startErrorOnCall!;
@@ -37,6 +44,7 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   @override
   Future<void> stopScan() async {
     stopScanCalls++;
+    if (stopCompleter != null) await stopCompleter!.future;
   }
 
   void emit(PrintlyDevice device) => _resultsController.add(device);
@@ -76,10 +84,14 @@ class _GatedStartPlatform extends _FakePlatform {
   Completer<void>? gateOnCall;
 
   @override
-  Future<void> startScan({required Set<ConnectionType> types}) async {
+  Future<void> startScan({
+    required Set<ConnectionType> types,
+    bool includeUnnamed = false,
+  }) async {
     startScanCalls++;
     lastTypes = types;
     typesCalls.add(types);
+    includeUnnamedCalls.add(includeUnnamed);
     if (startScanCalls == gateAtCallNumber && gateOnCall != null) {
       await gateOnCall!.future;
     }
@@ -280,6 +292,7 @@ void main() {
       platform.emit(
         PrintlyDevice(
           address: 'AA:BB',
+          name: 'PTP-II',
           availableTransports: <ConnectionType>{ConnectionType.ble},
         ),
       );
@@ -428,6 +441,9 @@ void main() {
         platform: platform,
         emitInterval: const Duration(milliseconds: 50),
       );
+      // A scan must actually be running: discoveries landing with no scan
+      // in flight are dropped (the post-stop late-result guard).
+      await coalesced.startScan();
       final List<int> lengths = <int>[];
       final StreamSubscription<List<PrintlyDevice>> sub = coalesced
           .devicesStream
@@ -438,6 +454,7 @@ void main() {
         platform.emit(
           PrintlyDevice(
             address: 'D$i',
+            name: 'Printer $i',
             availableTransports: <ConnectionType>{ConnectionType.ble},
           ),
         );
@@ -687,6 +704,285 @@ void main() {
 
       expect(gatedPlatform.stopScanCalls, 3);
       expect(gatedController.isScanning, isFalse);
+    });
+  });
+
+  group('includeUnnamed', () {
+    PrintlyDevice unnamed(String address, ConnectionType transport) =>
+        PrintlyDevice(
+          address: address,
+          availableTransports: <ConnectionType>{transport},
+        );
+
+    test('defaults to false and is passed through to the platform on every '
+        'round, including the classicFirst fallback', () async {
+      await controller.startScan(timeout: const Duration(milliseconds: 20));
+      expect(platform.includeUnnamedCalls, <bool>[false]);
+      await controller.stopScan();
+
+      await controller.startScan(includeUnnamed: true);
+      expect(platform.includeUnnamedCalls, <bool>[false, true]);
+      await controller.stopScan();
+
+      // classicFirst with nothing named: the BLE fallback round must carry
+      // the same includeUnnamed the caller chose for the scan.
+      await controller.startScan(
+        timeout: const Duration(milliseconds: 20),
+        strategy: ScanStrategy.classicFirst,
+        includeUnnamed: true,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(platform.includeUnnamedCalls, <bool>[false, true, true, true]);
+    });
+
+    test('by default a nameless BLE sighting is dropped at the Dart layer '
+        'too (defense in depth over the native filter)', () async {
+      await controller.startScan();
+      platform.emit(unnamed('AA:BB', ConnectionType.ble));
+      await pumpEventQueue();
+      expect(controller.currentDevices, isEmpty);
+    });
+
+    test('includeUnnamed: true lets nameless BLE sightings through', () async {
+      await controller.startScan(includeUnnamed: true);
+      platform.emit(unnamed('AA:BB', ConnectionType.ble));
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+    });
+
+    test('a nameless BLE re-sighting of an already-known device still '
+        'merges — real peripherals alternate named/nameless frames', () async {
+      await controller.startScan();
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          rssi: -70,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          rssi: -45,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      final PrintlyDevice merged = controller.currentDevices.single;
+      expect(merged.name, 'PTP-II');
+      expect(merged.rssi, -45, reason: 'the RSSI refresh must not be dropped');
+    });
+
+    test('a nameless CLASSIC sighting is never dropped — inquiry may report '
+        'the name in a later follow-up broadcast', () async {
+      await controller.startScan();
+      platform.emit(unnamed('AA:BB', ConnectionType.classic));
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+
+      // The late name lands and merges into the same record.
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices.single.name, 'PTP-II');
+    });
+  });
+
+  group('meaningful-change emissions (field perf finding)', () {
+    // In a 140-device environment every re-advertisement (usually only the
+    // RSSI moved) re-emitted the full list 4x/second, forcing consumers to
+    // write their own diff just to silence state churn.
+    test('an RSSI-only re-advertisement does not re-emit the list, but the '
+        'snapshot still refreshes', () async {
+      await controller.startScan();
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          rssi: -70,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      final List<List<PrintlyDevice>> emissions = <List<PrintlyDevice>>[];
+      final StreamSubscription<List<PrintlyDevice>> sub = controller
+          .devicesStream
+          .listen(emissions.add);
+      addTearDown(sub.cancel);
+      await pumpEventQueue();
+      final int baseline = emissions.length;
+
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          rssi: -42,
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(emissions.length, baseline, reason: 'only the RSSI moved');
+      expect(
+        controller.currentDevices.single.rssi,
+        -42,
+        reason: 'the synchronous snapshot must stay live',
+      );
+    });
+
+    test('a meaningful change (seenInScan flip, new transport, new device) '
+        'still emits', () async {
+      await controller.startScan();
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          isBonded: true,
+          seenInScan: false,
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+
+      final List<List<PrintlyDevice>> emissions = <List<PrintlyDevice>>[];
+      final StreamSubscription<List<PrintlyDevice>> sub = controller
+          .devicesStream
+          .listen(emissions.add);
+      addTearDown(sub.cancel);
+      await pumpEventQueue();
+      final int baseline = emissions.length;
+
+      // Bonded seed confirmed by a real sighting: seenInScan flips.
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          isBonded: true,
+          availableTransports: <ConnectionType>{ConnectionType.classic},
+        ),
+      );
+      await pumpEventQueue();
+      expect(emissions.length, baseline + 1, reason: 'seenInScan flipped');
+
+      // Dual-mode radio: BLE transport joins the record.
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+      expect(emissions.length, baseline + 2, reason: 'transport set grew');
+
+      platform.emit(
+        PrintlyDevice(
+          address: 'CC:DD',
+          name: 'Second printer',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+      expect(emissions.length, baseline + 3, reason: 'new device');
+    });
+  });
+
+  group('post-stop late results (field bug)', () {
+    // Android's BluetoothLeScanner.stopScan() is asynchronous: results
+    // buffered on the event channel keep arriving AFTER the controller has
+    // published `isScanning: false`. Measured in the field: the list kept
+    // growing from 115 to 141 entries after "scan finished" was shown.
+    test('a result arriving after stopScan completed is dropped — the list '
+        'and the stream stay frozen', () async {
+      await controller.startScan();
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.currentDevices, hasLength(1));
+
+      final List<List<PrintlyDevice>> emissions = <List<PrintlyDevice>>[];
+      final StreamSubscription<List<PrintlyDevice>> sub = controller
+          .devicesStream
+          .listen(emissions.add);
+      addTearDown(sub.cancel);
+
+      await controller.stopScan();
+      await pumpEventQueue();
+      final int emissionsAtStop = emissions.length;
+
+      // The late, buffered native result lands after the final flush.
+      platform.emit(
+        PrintlyDevice(
+          address: 'CC:DD',
+          name: 'Late arrival',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(
+        controller.currentDevices,
+        hasLength(1),
+        reason: 'a result after stop must not join the list',
+      );
+      expect(
+        emissions.length,
+        emissionsAtStop,
+        reason: 'devicesStream must stay silent once the scan has stopped',
+      );
+    });
+
+    test('results arriving while the stop is still in flight ARE accepted '
+        'and included in the final flush', () async {
+      await controller.startScan();
+      platform.emit(
+        PrintlyDevice(
+          address: 'AA:BB',
+          name: 'PTP-II',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      // Park the native stop on a gate: the scan is genuinely still running
+      // while the platform processes the stop request.
+      platform.stopCompleter = Completer<void>();
+      final Future<void> stopping = controller.stopScan();
+      await pumpEventQueue();
+      expect(controller.isScanning, isTrue);
+
+      platform.emit(
+        PrintlyDevice(
+          address: 'CC:DD',
+          name: 'Mid-stop arrival',
+          availableTransports: <ConnectionType>{ConnectionType.ble},
+        ),
+      );
+      await pumpEventQueue();
+
+      platform.stopCompleter!.complete();
+      await stopping;
+
+      expect(
+        controller.currentDevices,
+        hasLength(2),
+        reason: 'a result during a genuinely-running scan is still current',
+      );
     });
   });
 }

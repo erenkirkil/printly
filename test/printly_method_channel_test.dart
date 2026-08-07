@@ -168,6 +168,21 @@ void main() {
     final Map<Object?, Object?> args =
         invocations.single.arguments as Map<Object?, Object?>;
     expect(args['types'], <int>[0, 1]);
+    expect(
+      args['includeUnnamed'],
+      isFalse,
+      reason: 'the default must reach the native filter explicitly',
+    );
+  });
+
+  test('startScan forwards includeUnnamed: true', () async {
+    await platform.startScan(
+      types: const <ConnectionType>{ConnectionType.ble},
+      includeUnnamed: true,
+    );
+    final Map<Object?, Object?> args =
+        invocations.single.arguments as Map<Object?, Object?>;
+    expect(args['includeUnnamed'], isTrue);
   });
 
   test('stopScan delegates without arguments', () async {

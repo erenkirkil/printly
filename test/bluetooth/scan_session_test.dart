@@ -21,7 +21,10 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   Stream<PrintlyDevice> get scanResults => _resultsController.stream;
 
   @override
-  Future<void> startScan({required Set<ConnectionType> types}) async {
+  Future<void> startScan({
+    required Set<ConnectionType> types,
+    bool includeUnnamed = false,
+  }) async {
     startScanCalls++;
   }
 
@@ -54,8 +57,12 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
       const Stream<PrintlyConnectionEvent>.empty();
 }
 
+// Named: the controller's default includeUnnamed=false drops unknown
+// nameless BLE sightings, and these tests are about session replay
+// semantics, not the unnamed filter.
 PrintlyDevice _device(String address) => PrintlyDevice(
   address: address,
+  name: 'Printer $address',
   availableTransports: <ConnectionType>{ConnectionType.ble},
 );
 

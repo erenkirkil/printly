@@ -283,6 +283,17 @@ class Printly {
   /// excluded from [devicesStream] until they are actually seen by an
   /// inquiry — see [ScanController.startScan] for the full semantics.
   ///
+  /// When [includeUnnamed] is `false` (the default) nameless BLE
+  /// advertisements — overwhelmingly privacy-rotated phones, wearables and
+  /// beacons, measured at 135 of 141 records in one office scan — are
+  /// excluded, natively where possible so they never even cross the
+  /// platform channel. A thermal printer must advertise its name to be
+  /// pickable, so the default hides only what no user could choose. Pass
+  /// `true` for diagnostic UIs that must show everything. Nameless
+  /// *Classic* sightings are always kept (their name can arrive in a later
+  /// inquiry broadcast), as are nameless re-sightings of devices already on
+  /// the list (RSSI refreshes) — see [ScanController.startScan].
+  ///
   /// [strategy] defaults to [ScanStrategy.parallel]. Pass
   /// [ScanStrategy.classicFirst] to scan Classic first on Android and only
   /// fall back to a single BLE round when nothing named answered — see
@@ -296,11 +307,13 @@ class Printly {
     Duration? timeout,
     Set<ConnectionType>? types,
     bool includeBonded = true,
+    bool includeUnnamed = false,
     ScanStrategy strategy = ScanStrategy.parallel,
   }) => _scan.startScan(
     timeout: timeout ?? defaultScanTimeout,
     types: types,
     includeBonded: includeBonded,
+    includeUnnamed: includeUnnamed,
     strategy: strategy,
   );
 
@@ -460,8 +473,9 @@ class Printly {
   /// [PrintlyErrorCode.writeBusy] (previous write still in flight),
   /// [PrintlyErrorCode.writeTimeout] (printer stopped acknowledging —
   /// usually worth a reconnect + retry), [PrintlyErrorCode.disconnected],
-  /// or [PrintlyErrorCode.writeFailed]. On iOS printing ships in a later
-  /// release and currently rejects with a [PrintlyUnsupportedException].
+  /// or [PrintlyErrorCode.writeFailed]. Supported on both platforms:
+  /// Android writes over Classic RFCOMM or BLE GATT, iOS over BLE
+  /// (hardware-verified since 0.1.0).
   Future<void> print(PrintlyDevice device, PrintJob job) {
     // The write must travel over the same transport the active (or last)
     // connect() used — the native side keys the session by `type:address`.
@@ -490,6 +504,9 @@ class Printly {
   ///
   /// Safe to call multiple times — subsequent calls are cheap and return
   /// the cached value without hitting the storage backend.
+  @Deprecated(
+    'Will be removed in v1.0.0 along with the shared_preferences dependency. Persist the address and transport with your own storage and reconstruct the device via the public PrintlyDevice constructor — see the README section "Connecting without scanning".',
+  )
   Future<PrintlyDevice?> loadLastConnectedDevice() async {
     await _openStore();
     return _cachedLastDevice;
@@ -499,9 +516,15 @@ class Printly {
   /// Returns `null` until [loadLastConnectedDevice], [reconnectLastDevice],
   /// [enableAutoReconnect], or a successful [connect] has populated the
   /// cache.
+  @Deprecated(
+    'Will be removed in v1.0.0 along with the shared_preferences dependency. Persist the address and transport with your own storage and reconstruct the device via the public PrintlyDevice constructor — see the README section "Connecting without scanning".',
+  )
   PrintlyDevice? get lastConnectedDevice => _cachedLastDevice;
 
   /// Clears the persisted last-connected device and any cached value.
+  @Deprecated(
+    'Will be removed in v1.0.0 along with the shared_preferences dependency. Persist the address and transport with your own storage and reconstruct the device via the public PrintlyDevice constructor — see the README section "Connecting without scanning".',
+  )
   Future<void> forgetLastConnectedDevice() async {
     final LastDeviceStore store = await _openStore();
     _cachedLastDevice = null;
@@ -510,6 +533,9 @@ class Printly {
 
   /// Reconnects to the last persisted device. Returns `false` if no device
   /// has ever been remembered.
+  @Deprecated(
+    'Will be removed in v1.0.0 along with the shared_preferences dependency. Persist the address and transport with your own storage and reconstruct the device via the public PrintlyDevice constructor — see the README section "Connecting without scanning".',
+  )
   Future<bool> reconnectLastDevice({
     Duration timeout = kDefaultConnectTimeout,
   }) async {
@@ -526,6 +552,9 @@ class Printly {
   /// persisted device once whenever the adapter transitions to
   /// [BluetoothAdapterState.poweredOn]. When [persist] is true the flag is
   /// stored in [SharedPreferences] and restored on the next app launch.
+  @Deprecated(
+    'Will be removed in v1.0.0 along with the shared_preferences dependency. Persist the address and transport with your own storage and reconstruct the device via the public PrintlyDevice constructor — see the README section "Connecting without scanning".',
+  )
   Future<void> enableAutoReconnect({
     required bool enabled,
     bool persist = true,
@@ -546,6 +575,9 @@ class Printly {
   /// Whether auto-reconnect is currently enabled. Reflects the persisted
   /// value once [loadLastConnectedDevice] or [enableAutoReconnect] has been
   /// called; otherwise defaults to `false`.
+  @Deprecated(
+    'Will be removed in v1.0.0 along with the shared_preferences dependency. Persist the address and transport with your own storage and reconstruct the device via the public PrintlyDevice constructor — see the README section "Connecting without scanning".',
+  )
   bool get isAutoReconnectEnabled => _autoReconnectEnabled;
 
   void _onAdapterStateChangedForReconnect(BluetoothAdapterState state) {

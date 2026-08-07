@@ -1,3 +1,59 @@
+## 0.3.0 — 2026-08-07
+
+### Breaking
+
+- `startScan()` now excludes nameless BLE advertisements by default.
+  Measured in the field, 135 of 141 records in one office scan were
+  nameless privacy-rotated phones, wearables and beacons that no consumer
+  can present as a printer choice; they are now filtered natively, before
+  ever crossing the platform channel. Pass `includeUnnamed: true`
+  (available on `startScan()` and `PrintlyScanSession.start()`) to see
+  everything, e.g. in diagnostic UIs. Nameless **Classic** sightings are
+  never filtered (Android inquiry can deliver the name in a later
+  follow-up broadcast), and neither are nameless re-sightings of devices
+  already on the list (RSSI refreshes from frames that omit the local
+  name). `PrintlyPlatform.startScan()` gains a `bool includeUnnamed`
+  parameter — custom platform implementations must add it to their
+  override.
+
+### Added
+
+- Connecting by a known address without any scan is now documented in the
+  README — the public `PrintlyDevice` constructor has always allowed it
+  (Android; on iOS the address is a per-phone CoreBluetooth UUID that must
+  come from a previous scan).
+
+### Deprecated
+
+- The last-device persistence cluster — `loadLastConnectedDevice()`,
+  `lastConnectedDevice`, `forgetLastConnectedDevice()`,
+  `reconnectLastDevice()`, `enableAutoReconnect()`,
+  `isAutoReconnectEnabled` — is deprecated and will be removed in v1.0.0
+  together with the `shared_preferences` dependency. Persisting the printer
+  is an app concern: store the address and transport with your own storage
+  and reconstruct the device via the public `PrintlyDevice` constructor —
+  see the README section "Connecting without scanning (known address)".
+
+### Changed
+
+- `devicesStream` no longer re-emits the full list when only RSSI values
+  moved. In a 140-device environment every re-advertisement re-emitted
+  4×/second and consumers ended up diffing the list themselves just to
+  silence state churn. Identity, name, bonding, `seenInScan` and transport
+  changes still emit; `ScanController.currentDevices` now reads the live
+  dedup map, so the freshest RSSI is always available synchronously.
+
+### Fixed
+
+- `devicesStream` no longer keeps emitting after `stopScan()` has completed.
+  Android's `BluetoothLeScanner.stopScan()` is asynchronous, so results
+  buffered on the event channel kept landing after `isScanning` had already
+  reported `false` — silently growing the "final" list a consumer had just
+  rendered (measured in the field: 115 → 141 entries after "scan finished").
+  Results arriving while the stop is still in flight, and during the
+  `classicFirst` round transition, are still accepted; only results after
+  the scan has genuinely ended are dropped.
+
 ## 0.2.0 — 2026-08-06
 
 Merges Classic/BLE sightings of one printer into a single `PrintlyDevice`

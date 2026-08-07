@@ -21,6 +21,7 @@ internal class BleScanSession(
     adapter: BluetoothAdapter,
     private val onDevice: (Map<String, Any?>) -> Unit,
     private val onError: (Int) -> Unit = {},
+    private val includeUnnamed: Boolean = false,
 ) {
     private val scanner: BluetoothLeScanner? = adapter.bluetoothLeScanner
     private var callback: ScanCallback? = null
@@ -66,6 +67,16 @@ internal class BleScanSession(
         val name: String? = try {
             result.scanRecord?.deviceName ?: device.name
         } catch (_: SecurityException) { null }
+        // Nameless advertisements are overwhelmingly privacy-rotated phones,
+        // wearables and beacons (135 of 141 records in one office scan) — a
+        // thermal printer must advertise its name to be pickable. Dropping
+        // them HERE keeps them off the binder->channel->Dart path entirely.
+        // Note the `device.name` fallback above: a named printer whose ADV
+        // frame omits the local name still resolves through the adapter
+        // cache, so real printers are not hidden by this filter. Android's
+        // ScanFilter cannot express "has any name" (setDeviceName is an
+        // exact match), hence the manual check.
+        if (!includeUnnamed && name.isNullOrBlank()) return
         val bonded: Boolean = try {
             device.bondState == BluetoothDevice.BOND_BONDED
         } catch (_: SecurityException) { false }
