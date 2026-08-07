@@ -194,6 +194,16 @@ await printly.startScan(timeout: const Duration(seconds: 20));
 printly.defaultScanTimeout = const Duration(seconds: 20); // app-wide default
 ```
 
+**Nameless devices are hidden by default (0.3.0).** In one office scan, 135
+of 141 BLE records were nameless privacy-rotated phones, wearables and
+beacons — noise no picker can present. `startScan()` therefore drops
+nameless BLE advertisements natively, before they ever cross the platform
+channel. Pass `includeUnnamed: true` (also on `PrintlyScanSession.start()`)
+for diagnostic UIs that must see everything. Nameless *Classic* sightings
+are never filtered (their name can arrive in a later inquiry broadcast),
+and neither are nameless re-sightings of devices already on the list, so
+RSSI keeps refreshing.
+
 **The bonded-seed trap.** On Android, Classic discovery seeds `devicesStream`
 from the OS bond cache *before* any inquiry result arrives, so a printer you
 paired months ago (and that may not even be powered on) can appear

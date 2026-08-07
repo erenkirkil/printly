@@ -1,4 +1,4 @@
-## Unreleased
+## 0.3.0 — 2026-08-07
 
 ### Breaking
 
