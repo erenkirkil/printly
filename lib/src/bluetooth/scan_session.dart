@@ -118,7 +118,8 @@ class PrintlyScanSession {
   /// resolved lazily so a value changed after this session was created (but
   /// before [start] is called) still applies.
   ///
-  /// **On join, `timeout`/`types`/`includeBonded`/`strategy` are IGNORED.**
+  /// **On join, `timeout`/`types`/`includeBonded`/`includeUnnamed`/
+  /// `strategy` are IGNORED.**
   /// If a scan is already running when [start] is called, [start] joins it
   /// rather than starting a second one — [ScanController.startScan] itself
   /// no-ops when a scan is already in flight, so whatever parameters the
@@ -171,6 +172,7 @@ class PrintlyScanSession {
     Duration? timeout,
     Set<ConnectionType>? types,
     bool includeBonded = true,
+    bool includeUnnamed = false,
     ScanStrategy strategy = ScanStrategy.parallel,
   }) async {
     _assertNotDisposed();
@@ -193,6 +195,7 @@ class PrintlyScanSession {
       timeout: timeout ?? _resolveDefaultTimeout(),
       types: types,
       includeBonded: includeBonded,
+      includeUnnamed: includeUnnamed,
       strategy: strategy,
     );
     // stop()/dispose() may have landed while the await above was in flight;

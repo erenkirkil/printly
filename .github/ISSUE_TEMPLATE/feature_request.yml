@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose an addition or change to the API
+title: "[feat] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that printly currently makes hard? Field context (printer model, environment) strengthens the case.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behavior
+      description: Sketch the call site you wish existed
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      description: How you solve it today, if at all

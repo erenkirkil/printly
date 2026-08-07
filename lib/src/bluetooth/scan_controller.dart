@@ -125,6 +125,7 @@ class ScanController {
   Future<void>? _pendingStop;
   bool _disposed = false;
   bool _includeBonded = true;
+  bool _includeUnnamed = false;
 
   /// Whether the in-progress scan is running the Android two-round
   /// [ScanStrategy.classicFirst] transition (i.e. `strategy` was
@@ -176,7 +177,12 @@ class ScanController {
 
   /// Synchronous snapshot of the current device list — handy for state
   /// management integrations that want an initial value without subscribing.
-  List<PrintlyDevice> get currentDevices => _devicesSubject.value;
+  /// Read from the live dedup map, not the last stream emission: RSSI-only
+  /// refreshes deliberately do not re-emit on [devicesStream] (see
+  /// [_flushEmit]), so the subject's value can lag on signal strength. This
+  /// snapshot never does.
+  List<PrintlyDevice> get currentDevices =>
+      List<PrintlyDevice>.unmodifiable(_dedup.values);
 
   /// Synchronous snapshot of [isScanningStream].
   bool get isScanning => _isScanningSubject.value;
@@ -200,6 +206,18 @@ class ScanController {
   /// result still appears once [PrintlyDevice.mergeWith] flips
   /// [PrintlyDevice.seenInScan] to `true`.
   ///
+  /// When [includeUnnamed] is `false` (the default) nameless BLE
+  /// advertisements are excluded — natively where possible (so they never
+  /// cross the platform channel) and again here as defense in depth.
+  /// Measured in the field, 135 of 141 records in one office scan were
+  /// nameless privacy-rotated phones, wearables and beacons; a thermal
+  /// printer must advertise its name to be pickable, so the default hides
+  /// what no consumer can present as a choice. Pass `true` to see
+  /// everything (diagnostic UIs, or pairing flows that identify a device by
+  /// address). Nameless *Classic* sightings are never dropped: Android's
+  /// inquiry can deliver the name in a later follow-up broadcast, and the
+  /// record completes via [PrintlyDevice.mergeWith].
+  ///
   /// [strategy] defaults to [ScanStrategy.parallel] (the historical
   /// behaviour: [types] requested in one native scan). See
   /// [ScanStrategy.classicFirst] for the Android Classic-then-BLE fallback
@@ -209,6 +227,7 @@ class ScanController {
     Duration? timeout,
     Set<ConnectionType>? types,
     bool includeBonded = true,
+    bool includeUnnamed = false,
     ScanStrategy strategy = ScanStrategy.parallel,
   }) {
     _assertNotDisposed();
@@ -230,6 +249,7 @@ class ScanController {
               timeout: effectiveTimeout,
               types: effectiveTypes,
               includeBonded: includeBonded,
+              includeUnnamed: includeUnnamed,
               strategy: strategy,
             ),
           );
@@ -241,6 +261,7 @@ class ScanController {
       timeout: effectiveTimeout,
       types: effectiveTypes,
       includeBonded: includeBonded,
+      includeUnnamed: includeUnnamed,
       strategy: strategy,
     );
     return _pendingStart!;
@@ -275,6 +296,7 @@ class ScanController {
     required Duration timeout,
     required Set<ConnectionType> types,
     required bool includeBonded,
+    required bool includeUnnamed,
     required ScanStrategy strategy,
   }) async {
     try {
@@ -282,6 +304,7 @@ class ScanController {
       _emitTimer = null;
       _dedup.clear();
       _includeBonded = includeBonded;
+      _includeUnnamed = includeUnnamed;
       _devicesSubject.add(const <PrintlyDevice>[]);
       _isScanningSubject.add(true);
 
@@ -297,7 +320,10 @@ class ScanController {
           ? roundOneTypes(isIOS: Platform.isIOS)
           : types;
 
-      await _platform.startScan(types: round1Types);
+      await _platform.startScan(
+        types: round1Types,
+        includeUnnamed: includeUnnamed,
+      );
       _timeoutTimer?.cancel();
       _timeoutTimer = Timer(timeout, _onScanWindowElapsed);
     } catch (_) {
@@ -366,6 +392,7 @@ class ScanController {
       if (_disposed || !isScanning) return;
       await _platform.startScan(
         types: const <ConnectionType>{ConnectionType.ble},
+        includeUnnamed: _includeUnnamed,
       );
       // Post-start hole: a concurrent stop raced this startScan() and lost,
       // so the native BLE scan we just started is orphaned unless we stop
@@ -432,7 +459,35 @@ class ScanController {
 
   void _onDeviceDiscovered(PrintlyDevice device) {
     if (_disposed) return;
+    // Android's BluetoothLeScanner.stopScan() is asynchronous: results
+    // buffered on the event channel keep landing after [_runStop] has
+    // published `isScanning: false`, silently growing the "final" list a
+    // consumer just rendered (measured in the field: 115 → 141 entries
+    // after "scan finished"). Dropping them here keeps the stop terminal.
+    // Results arriving while a stop is merely in flight are unaffected —
+    // [_runStop] flips [isScanning] only after the native call returns —
+    // and the classicFirst round transition deliberately holds [isScanning]
+    // `true`, so round-2 results are unaffected too.
+    if (!isScanning) return;
     if (!_includeBonded && !device.seenInScan) return;
+    // Defense in depth over the native unnamed filter: nameless BLE
+    // sightings of UNKNOWN devices never reach consumers, even from a
+    // platform implementation that predates (or skips) the native-side
+    // filtering. Two deliberate exemptions:
+    // - Classic sightings: Android inquiry may report the name in a later
+    //   follow-up broadcast, so an early nameless Classic sighting can
+    //   still become a real printer once [PrintlyDevice.mergeWith] fills
+    //   the name in.
+    // - Already-known devices: real peripherals alternate between frames
+    //   with and without the local name (the name often rides the scan
+    //   response only), so a nameless re-sighting of a device the list
+    //   already shows is an RSSI/transport refresh, not noise.
+    if (!_includeUnnamed &&
+        !device.hasName &&
+        !device.availableTransports.contains(ConnectionType.classic) &&
+        !_dedup.containsKey(device.dedupKey)) {
+      return;
+    }
     final PrintlyDevice? existing = _dedup[device.dedupKey];
     final PrintlyDevice merged = existing == null
         ? device
@@ -456,7 +511,41 @@ class ScanController {
   void _flushEmit() {
     _emitTimer = null;
     if (_disposed) return;
-    _devicesSubject.add(List<PrintlyDevice>.unmodifiable(_dedup.values));
+    final List<PrintlyDevice> next = List<PrintlyDevice>.unmodifiable(
+      _dedup.values,
+    );
+    // Skip emissions that would only refresh RSSI. In a 140-device
+    // environment every re-advertisement re-emitted the full list 4x/s and
+    // consumers ended up writing their own diff just to silence state
+    // churn. Identity, name, bonding, seenInScan or transport changes all
+    // still emit; the freshest RSSI is always available synchronously via
+    // [currentDevices], and the final post-stop flush in [_runStop] bypasses
+    // this check entirely.
+    if (_sameMeaningfully(next, _devicesSubject.value)) return;
+    _devicesSubject.add(next);
+  }
+
+  /// Whether [next] differs from [previous] in anything a list UI renders —
+  /// everything except [PrintlyDevice.rssi]. Order-sensitive by design:
+  /// [_dedup] preserves insertion order, so a reorder implies a rebuild.
+  static bool _sameMeaningfully(
+    List<PrintlyDevice> next,
+    List<PrintlyDevice> previous,
+  ) {
+    if (next.length != previous.length) return false;
+    for (int i = 0; i < next.length; i++) {
+      final PrintlyDevice a = next[i];
+      final PrintlyDevice b = previous[i];
+      if (a.address != b.address ||
+          a.name != b.name ||
+          a.isBonded != b.isBonded ||
+          a.seenInScan != b.seenInScan ||
+          a.availableTransports.length != b.availableTransports.length ||
+          !a.availableTransports.containsAll(b.availableTransports)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void _onScanError(Object error, StackTrace stack) {

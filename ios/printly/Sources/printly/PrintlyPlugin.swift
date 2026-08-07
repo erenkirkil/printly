@@ -104,7 +104,8 @@ public class PrintlyPlugin: NSObject, FlutterPlugin {
         let args = call.arguments as? [String: Any] ?? [:]
         let rawTypes = args[WireCodes.Keys.types] as? [Any] ?? []
         let types: [Int] = rawTypes.compactMap { ($0 as? NSNumber)?.intValue }
-        scanResultsHandler.start(types: types) { outcome in
+        let includeUnnamed = args[WireCodes.Keys.includeUnnamed] as? Bool ?? false
+        scanResultsHandler.start(types: types, includeUnnamed: includeUnnamed) { outcome in
             switch outcome {
             case .success:
                 result(nil)

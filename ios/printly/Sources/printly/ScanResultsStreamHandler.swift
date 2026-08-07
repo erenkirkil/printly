@@ -13,6 +13,13 @@ final class ScanResultsStreamHandler: NSObject, FlutterStreamHandler {
     private var sink: FlutterEventSink?
     private var scanning = false
 
+    /// Whether nameless advertisements are reported. Set per scan from the
+    /// wire payload; false (the wire default) drops them in `didDiscover`
+    /// before they cross the event channel — nameless results are
+    /// overwhelmingly privacy-rotated phones/wearables/beacons, and a
+    /// thermal printer must advertise its name to be pickable.
+    private var includeUnnamed = false
+
     init(central: CentralController) {
         self.central = central
         super.init()
@@ -44,8 +51,10 @@ final class ScanResultsStreamHandler: NSObject, FlutterStreamHandler {
     /// `permission_denied`, matching Android).
     func start(
         types: [Int],
+        includeUnnamed: Bool = false,
         completion: @escaping (Result<Void, PrintlyError>) -> Void
     ) {
+        self.includeUnnamed = includeUnnamed
         guard types.contains(WireCodes.typeBle) else {
             // No BLE requested — nothing iOS can do (MFi Classic is out of
             // scope for Sprint 3).
@@ -96,6 +105,14 @@ final class ScanResultsStreamHandler: NSObject, FlutterStreamHandler {
         advertisementData: [String: Any]
     ) {
         guard let sink = sink else { return }
+        let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
+        let resolvedName = peripheral.name ?? advertisedName
+        // Mirrors the Android BleScanSession filter: nameless advertisements
+        // never cross the channel unless the caller opted in. `peripheral.name`
+        // survives frames that omit the local name (CoreBluetooth caches it),
+        // so a real printer is not hidden when its ADV/scan-response split
+        // carries the name only part of the time.
+        if !includeUnnamed, resolvedName?.isEmpty != false { return }
         var map: [String: Any] = [
             WireCodes.Keys.address: peripheral.identifier.uuidString,
             WireCodes.Keys.type: WireCodes.typeBle,
@@ -110,8 +127,7 @@ final class ScanResultsStreamHandler: NSObject, FlutterStreamHandler {
             // true.
             WireCodes.Keys.seenInScan: true,
         ]
-        let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
-        if let name = peripheral.name ?? advertisedName {
+        if let name = resolvedName {
             map[WireCodes.Keys.name] = name
         }
         sink(map)
