@@ -1,3 +1,18 @@
+## Unreleased
+
+### Fixed
+
+- `ios/printly.podspec` now carries the same version as `pubspec.yaml`. It
+  was left at `0.2.0` when 0.3.0 shipped, so CocoaPods reported the wrong
+  version to consumers and — more importantly — had no signal that the
+  plugin had changed at all: a `Podfile.lock` `SPEC CHECKSUMS` entry hashes
+  the podspec file, not the sources it points at. 0.3.0 still compiled
+  correctly on iOS only because the Swift file *set* happened to be
+  unchanged; a release that adds or removes a source file would have left
+  consumers building a stale file list with no error. A test
+  (`test/packaging_version_test.dart`) now compares the two manifests, and
+  the release checklist bumps the podspec alongside the pubspec.
+
 ## 0.3.0 — 2026-08-07
 
 ### Breaking

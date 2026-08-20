@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'printly'
-  s.version          = '0.2.0'
+  s.version          = '0.3.0'
   s.summary          = 'Thermal printer SDK for Flutter.'
   s.description      = <<-DESC
 Thermal printer SDK for Flutter. On iOS this pod provides BLE scanning,
