@@ -1,5 +1,34 @@
 ## Unreleased
 
+### Added
+
+- `PrintlyPlatform` is now exported from `package:printly/printly.dart`. It
+  was always designed to be faked — it extends `PlatformInterface` with the
+  usual token guard, and printly's own tests install fakes through it — but
+  it was never reachable from the barrel, so an app could not test its own
+  logic against a fake printer. The two workarounds left in the field were
+  both bad: importing `package:printly/src/…` trips the
+  `implementation_imports` lint and couples the app to internals, while
+  stubbing the raw `MethodChannel('printly')` hard-codes channel names and
+  wire codes into the app's tests — and those stubs do not break when the
+  wire changes, they silently start measuring the wrong thing.
+  Extend `PrintlyPlatform` (do not implement it) so future additions stay
+  non-breaking, as the class doc says.
+
+### Changed
+
+- The Android module now compiles against Java 17 and Kotlin `jvmTarget`
+  17 (was 11), and the Android Gradle Plugin moved to 8.13.2. Building the
+  plugin therefore needs a JDK 17 or newer toolchain. In practice most
+  projects are already there — Flutter 3.35, this package's declared
+  minimum, requires JDK 17 for Android builds regardless of printly — but
+  a project pinned to an older JDK will see a Gradle toolchain error
+  rather than anything printly-specific, so it is called out here.
+  `compileSdk` (36) and `minSdk` (24) are unchanged. The example app also
+  drops the `android.enableJetifier` flag: nothing in the dependency graph
+  pulls a pre-AndroidX support-library artifact any more, so the rewrite
+  step was doing nothing but slowing builds down.
+
 ### Fixed
 
 - `ios/printly.podspec` now carries the same version as `pubspec.yaml`. It

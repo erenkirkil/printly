@@ -49,7 +49,7 @@ abstract class PrintlyPlatform extends PlatformInterface {
   /// A broadcast stream of native Bluetooth adapter state changes.
   ///
   /// Listening to this stream lazily initialises the native observer
-  /// (Android [BluetoothAdapter] broadcast receiver or iOS
+  /// (Android `BluetoothAdapter` broadcast receiver or iOS
   /// `CBCentralManager`). On iOS this is also the moment the system
   /// permission prompt is triggered if Bluetooth usage has not yet been
   /// authorised.
@@ -148,8 +148,10 @@ abstract class PrintlyPlatform extends PlatformInterface {
 
   /// Asks the native side to open a link to [device] over [transport]. The
   /// future completes once the native stack reports the link as open, or
-  /// rejects with a [PlatformException] if the attempt fails (permission
-  /// denied, timeout, remote refusal, etc.).
+  /// rejects with a raw `PlatformException` if the attempt fails (permission
+  /// denied, timeout, remote refusal, etc.). Raw platform errors stop here:
+  /// the controllers above this layer map them to the sealed
+  /// `PrintlyException` hierarchy, which is what application code sees.
   ///
   /// [transport] must be one of [PrintlyDevice.availableTransports] — the
   /// caller (`ConnectionController`) resolves which one before dispatching
@@ -186,8 +188,9 @@ abstract class PrintlyPlatform extends PlatformInterface {
   ///
   /// The future completes once the native stack has handed the payload to the
   /// transport (RFCOMM `OutputStream` flush, or the final GATT characteristic
-  /// write acknowledgement), or rejects with a [PlatformException] when no link
-  /// is open, the link is not yet ready for writes, or the transport fails.
+  /// write acknowledgement), or rejects with a raw `PlatformException` when no
+  /// link is open, the link is not yet ready for writes, or the transport
+  /// fails — mapped to `PrintlyWriteException` before it reaches callers.
   ///
   /// [transport] must match the value passed to the [connect] call that
   /// opened this session — see the note on [connect].
