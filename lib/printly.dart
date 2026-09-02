@@ -18,6 +18,7 @@ export 'src/core/connection_type.dart';
 export 'src/core/printly_device.dart';
 export 'src/core/printly_exception.dart';
 export 'src/core/printly_permission_status.dart';
+export 'src/network/tcp_printer_transport.dart' show kDefaultWriteTimeout;
 export 'src/platform/printly_platform_interface.dart';
 export 'src/print/print_config.dart';
 export 'src/print/print_job.dart';

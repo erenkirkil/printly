@@ -2,6 +2,22 @@
 
 ### Added
 
+- **Network (Ethernet/Wi-Fi) printing over TCP.** `PrintlyDevice.network(host:,
+  port:)` devices now connect, print and disconnect over a plain Dart socket
+  (raw ESC/POS, default port 9100) — no native code, no wire-protocol change.
+  Connect/print/disconnect and the per-device `ConnectionState`,
+  `activeDeviceStream` and `transportOf` streams behave the same as Bluetooth.
+  "Connected" means the socket is open (TCP has no readiness signal the way
+  BLE service discovery does). `ConnectionType.network` no longer rejects with
+  `network_not_supported`; that code remains in the vocabulary for backward
+  compatibility but is never thrown. Android apps must declare
+  `android.permission.INTERNET` themselves — the plugin does not declare it,
+  so Bluetooth-only apps do not inherit it — and iOS apps should add
+  `NSLocalNetworkUsageDescription`. A Custom TK180 was verified to accept
+  this byte stream over Ethernet, but from macOS over a raw socket rather
+  than through printly; the printly-driven round on that printer is still
+  queued.
+
 - `isLocationRequired()` reports whether Bluetooth scanning on this device
   needs the location *permission* — `true` on Android below API 31, `false`
   from API 31 up and on iOS. The native side already knew this (it is the

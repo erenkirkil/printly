@@ -49,5 +49,7 @@
 	<string>This example uses Bluetooth to discover and connect to nearby thermal printers.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>This example uses Bluetooth to discover and connect to nearby thermal printers.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>This example connects to thermal printers on your local network over TCP (port 9100).</string>
 </dict>
 </plist>

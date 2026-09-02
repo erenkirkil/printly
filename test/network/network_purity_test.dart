@@ -2,22 +2,20 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-/// The raster core must stay renderer-free.
+/// The network transport must stay renderer-free.
 ///
-/// `PrintlyBitmap` and everything under it is pure integer work on typed
-/// arrays: no engine, no binding, no widget tree. That is what makes it
-/// testable in a plain `test()`, cheap to move into an isolate, and reusable
-/// with pixels from any source. `printly_raster.dart` is the single file
-/// allowed to reach for the renderer.
+/// Everything under `lib/src/network/` is pure `dart:io` + typed-array work:
+/// no engine, no binding, no widget tree. That is what lets it move to any
+/// Dart runtime (desktop, server, isolate) and be tested against a plain
+/// loopback socket instead of a device.
 ///
 /// This test exists because that boundary is invisible at a call site — an
-/// `import 'dart:ui'` added for one convenience would erase it silently.
+/// `import 'dart:ui'` or `package:flutter/…` added for one convenience would
+/// erase it silently.
 void main() {
   const List<String> pureFiles = <String>[
-    'lib/src/raster/printly_bitmap.dart',
-    'lib/src/raster/printly_dithering.dart',
-    'lib/src/raster/raster_dither.dart',
-    'lib/src/raster/raster_encoder.dart',
+    'lib/src/network/network_address.dart',
+    'lib/src/network/tcp_printer_transport.dart',
   ];
 
   // Dart accepts either quote style and no lint here forces one
@@ -48,8 +46,8 @@ void main() {
         offenders,
         isEmpty,
         reason:
-            'the raster core must not depend on dart:ui or Flutter — '
-            'put renderer work in lib/src/raster/printly_raster.dart',
+            'the network transport must not depend on dart:ui or Flutter — '
+            'keep lib/src/network/ pure Dart',
       );
     });
   }

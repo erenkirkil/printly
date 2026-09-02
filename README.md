@@ -4,15 +4,14 @@
 [![CI](https://github.com/erenkirkil/printly/actions/workflows/ci.yml/badge.svg)](https://github.com/erenkirkil/printly/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Thermal printer SDK for Flutter. Bluetooth Classic + BLE, ESC/POS receipts
-(text, barcode, QR), Turkish that prints on any printer, typed errors, and a
-built-in permission flow — in one self-contained plugin with no opaque vendor
-SDKs.
+Thermal printer SDK for Flutter. Bluetooth Classic + BLE + Ethernet/Wi-Fi,
+ESC/POS receipts (text, barcode, QR), Turkish that prints on any printer,
+typed errors, and a built-in permission flow — in one self-contained plugin
+with no opaque vendor SDKs.
 
-> Verified end to end on real hardware, but on a single printer so far — see
-> [Tested hardware](#tested-hardware). Network (Ethernet/WiFi) printing is
-> planned for a later release and is deliberately absent from the API until
-> it works.
+> Verified end to end on real hardware — see
+> [Tested hardware](#tested-hardware). Network (Ethernet/Wi-Fi) printing over
+> TCP port 9100 is supported as of 0.4.0.
 
 ## Why another printer package?
 
@@ -25,7 +24,8 @@ same states, same codes on Android and iOS — as a feature.
 ## Features
 
 - Bluetooth **Classic (SPP)** and **BLE** scan/connect in a single plugin
-  (network transport planned)
+- **Network printers** over TCP (raw ESC/POS, typically port 9100) via
+  `PrintlyDevice.network(host:, port:)` — pure Dart, no native code
 - One `PrintlyDevice` per physical radio — `availableTransports` lists every
   transport it was seen on, and `connect(transport:)` picks which one to use
 - Enum-based `BluetoothAdapterState` stream (not a bool), independent from
@@ -316,13 +316,65 @@ learned from a scan. Direct-address connect is therefore an Android
 technique; on iOS, store the UUID your app observed in a previous scan of
 that same phone, or scan again.
 
+## Network printers (TCP/9100)
+
+Ethernet and Wi-Fi printers speak raw ESC/POS over a TCP socket, usually on
+port 9100. Build a network device and connect the same way you would a
+Bluetooth one:
+
+```dart
+final printer = PrintlyDevice.network(host: '192.168.0.5', port: 9100);
+await printly.connect(printer);
+final job = await printly.newJob(paperWidth: PrintlyPaperWidth.mm58);
+job.text('Merhaba');
+await printly.print(printer, job);
+await printly.disconnect(device: printer);
+```
+
+`connect()` completing means the **socket is open**, not that the printer is
+ready — TCP gives no readiness signal the way BLE service discovery does.
+
+**Android:** add `INTERNET` to your app's manifest — printly does not declare
+it, to keep the permission out of Bluetooth-only apps:
+
+```xml
+<uses-permission android:name="android.permission.INTERNET"/>
+```
+
+**iOS:** connecting to a printer on the local network triggers the iOS 14+
+local-network permission. Add a usage description to `ios/Runner/Info.plist`:
+
+```xml
+<key>NSLocalNetworkUsageDescription</key>
+<string>Used to print to your network printer.</string>
+```
+
+A denied local-network permission surfaces as
+`PrintlyErrorCode.connectFailed`.
+
+**Testing against a fake:** a `PrintlyPlatform` fake never sees network
+`connect`/`write` calls — the TCP transport lives in Dart, above the platform
+interface. Fake the Bluetooth path through `PrintlyPlatform`; test the network
+path against a real loopback `ServerSocket`.
+
 ## Platform setup
 
 ### Android
 
-No manifest changes needed — the plugin declares the Bluetooth permissions
-(with the correct `maxSdkVersion` splits for Android 12+). Call
+Bluetooth needs no manifest changes — the plugin declares the Bluetooth
+permissions (with the correct `maxSdkVersion` splits for Android 12+). Call
 `Printly.instance.requestPermissions()` before scanning.
+
+Network printers need one entry you have to add yourself:
+
+```xml
+<uses-permission android:name="android.permission.INTERNET"/>
+```
+
+The plugin deliberately leaves `INTERNET` out so Bluetooth-only apps do not
+inherit it, and the Flutter tool injects it into *debug and profile* manifests
+only — so forgetting it works while you develop and fails in release. See
+[Network printers (TCP/9100)](#network-printers-tcp9100).
 
 ### iOS
 
@@ -350,7 +402,17 @@ No manifest changes needed — the plugin declares the Bluetooth permissions
    end
    ```
 
-3. iOS limitations: Bluetooth **Classic** requires MFi certification, so
+3. Printing to network printers additionally needs the local-network usage
+   description — iOS 14+ prompts on the first connection, and a denial
+   surfaces as `PrintlyErrorCode.connectFailed`. Skip this if you only use
+   Bluetooth; see [Network printers (TCP/9100)](#network-printers-tcp9100):
+
+   ```xml
+   <key>NSLocalNetworkUsageDescription</key>
+   <string>Used to print to your network printer.</string>
+   ```
+
+4. iOS limitations: Bluetooth **Classic** requires MFi certification, so
    Classic printers are Android-only (`PrintlyErrorCode.classicRequiresMfi`);
    use the BLE transport on iOS. Most cheap 58 mm printers are dual-mode —
    they appear as Classic on Android and expose a BLE mode that iOS can see.
@@ -438,17 +500,18 @@ before the apps that depend on it:
 | 5 | iOS Bluetooth print, SPM & 16 KB readiness | ✅ done |
 | 6 | Raster pipeline, docs & release | ✅ done |
 
-Network (Ethernet/WiFi) printing moved out of the `v0.1.0` scope and is
-planned for a follow-up release.
-
 ## Tested hardware
 
 | Printer | Transport | Paper | Notes |
 | --- | --- | --- | --- |
 | Cashino PTP-II | Classic (SPP) + BLE | 58 mm | Text/QR/barcode verified on Android 12; BLE print verified from iOS. **Ignores `ESC t` entirely** (pages 0–50 swept, none took effect) — Turkish works here through the raster path, verified on paper. Supports `GS v 0`; no cutter, and it answers the cut command by feeding blank paper. |
+| Custom TK180 | Network (TCP/9100) | 52 mm ticket | Text/align/feed and `GS V 0` full cut verified from macOS over Ethernet. `ESC t` **is** honoured, but Turkish code pages (PC857/WPC1254) are not installed in this firmware — Turkish prints through the raster path (`GS v 0`), verified on paper. DHCP off from the factory (static IP). |
 
-Verified on one printer so far. Support beyond this device class is the goal,
-not a claim — a second BLE printer is the next thing on the hardware queue.
+Two printers so far, and the two rows carry different weight: the PTP-II was
+driven by printly itself on Android and iOS, while the TK180 row records what
+the printer does with raw ESC/POS sent over a socket from macOS — a printly
+network round on that device is the next item on the hardware queue. Support
+beyond these device classes is the goal, not a claim.
 
 ## License
 
