@@ -98,6 +98,20 @@ abstract class PrintlyPlatform extends PlatformInterface {
     );
   }
 
+  /// Whether Bluetooth scanning on this device requires the location
+  /// *permission* (`ACCESS_FINE_LOCATION`): `true` on Android below API 31,
+  /// `false` from API 31 up and on iOS.
+  ///
+  /// This is a different question from [isLocationServiceEnabled], which
+  /// reports whether the location *service* is currently blocking a scan.
+  /// Use this one to decide whether to show a rationale before requesting
+  /// the permission; use that one to decide whether a scan would come back
+  /// empty. The API-level threshold lives on the native side on purpose, so
+  /// applications do not have to keep a copy of it in sync.
+  Future<bool> isLocationRequired() {
+    throw UnimplementedError('isLocationRequired() has not been implemented.');
+  }
+
   /// Opens the system location settings page so the user can turn the
   /// location service on. Android only — returns `false` as a no-op on iOS,
   /// where this SDK does not touch CoreLocation.

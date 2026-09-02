@@ -66,6 +66,7 @@ extension WireCodes {
         static let disconnect = "disconnect"
         static let write = "write"
         static let isLocationServiceEnabled = "isLocationServiceEnabled"
+        static let isLocationRequired = "isLocationRequired"
         static let openLocationSettings = "openLocationSettings"
     }
 

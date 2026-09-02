@@ -49,6 +49,7 @@ internal object WireCodes {
         const val DISCONNECT = "disconnect"
         const val WRITE = "write"
         const val IS_LOCATION_SERVICE_ENABLED = "isLocationServiceEnabled"
+        const val IS_LOCATION_REQUIRED = "isLocationRequired"
         const val OPEN_LOCATION_SETTINGS = "openLocationSettings"
     }
 

@@ -2,6 +2,23 @@
 
 ### Added
 
+- `isLocationRequired()` reports whether Bluetooth scanning on this device
+  needs the location *permission* — `true` on Android below API 31, `false`
+  from API 31 up and on iOS. The native side already knew this (it is the
+  same `SDK_INT < S` check that decides which permissions printly requests)
+  but never exposed it, so an application that had to show a permission
+  rationale before asking for `ACCESS_FINE_LOCATION` re-derived the API-level
+  threshold itself, usually by adding a device-info dependency. That put the
+  same truth in two places, free to drift the moment printly moved its own
+  threshold. The threshold now stays inside the package.
+
+  It answers a different question from `isLocationServiceEnabled()`, which
+  reports whether the location *service* is currently blocking a scan: on a
+  pre-31 device with the permission granted and the service switched off,
+  `isLocationRequired()` is `true` and `isLocationServiceEnabled()` is
+  `false`. Custom platform implementations get a default that throws
+  `UnimplementedError`, so nothing breaks until they choose to override it.
+
 - `PrintlyPlatform` is now exported from `package:printly/printly.dart`. It
   was always designed to be faked — it extends `PlatformInterface` with the
   usual token guard, and printly's own tests install fakes through it — but

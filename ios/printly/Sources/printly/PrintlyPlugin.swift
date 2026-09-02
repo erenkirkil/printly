@@ -93,6 +93,10 @@ public class PrintlyPlugin: NSObject, FlutterPlugin {
             // printly does not touch CoreLocation (creating a manager would
             // raise a permission question this package has no business asking).
             result(true)
+        case WireCodes.Methods.isLocationRequired:
+            // CoreBluetooth scanning never requires location authorisation on
+            // iOS, so the permission this asks about does not exist here.
+            result(false)
         case WireCodes.Methods.openLocationSettings:
             result(false)
         default:

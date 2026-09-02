@@ -25,6 +25,8 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   bool requestEnableBluetoothResult = true;
   int isLocationServiceEnabledCalls = 0;
   bool isLocationServiceEnabledResult = true;
+  int isLocationRequiredCalls = 0;
+  bool isLocationRequiredResult = false;
   int openLocationSettingsCalls = 0;
   bool openLocationSettingsResult = true;
   int writeCalls = 0;
@@ -74,6 +76,12 @@ class _FakePlatform extends PrintlyPlatform with MockPlatformInterfaceMixin {
   Future<bool> isLocationServiceEnabled() async {
     isLocationServiceEnabledCalls++;
     return isLocationServiceEnabledResult;
+  }
+
+  @override
+  Future<bool> isLocationRequired() async {
+    isLocationRequiredCalls++;
+    return isLocationRequiredResult;
   }
 
   @override
@@ -288,6 +296,29 @@ void main() {
 
       expect(await printly.isLocationServiceEnabled(), isFalse);
       expect(platform.isLocationServiceEnabledCalls, 1);
+    });
+  });
+
+  group('isLocationRequired', () {
+    test('delegates to the platform and returns its flag', () async {
+      final Printly printly = Printly.forTesting();
+      platform.isLocationRequiredResult = true;
+
+      expect(await printly.isLocationRequired(), isTrue);
+      expect(platform.isLocationRequiredCalls, 1);
+    });
+
+    test('is independent of the location service answer', () async {
+      // The two questions can disagree: a pre-31 device with the permission
+      // still required, but the location service switched off. A consumer
+      // that conflates them shows the wrong prompt, so the facade must keep
+      // the two calls separate rather than deriving one from the other.
+      final Printly printly = Printly.forTesting();
+      platform.isLocationRequiredResult = true;
+      platform.isLocationServiceEnabledResult = false;
+
+      expect(await printly.isLocationRequired(), isTrue);
+      expect(await printly.isLocationServiceEnabled(), isFalse);
     });
   });
 

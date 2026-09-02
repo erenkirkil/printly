@@ -257,6 +257,25 @@ class Printly {
     return PrintlyPlatform.instance.isLocationServiceEnabled();
   }
 
+  /// Whether Bluetooth scanning on this device requires the location
+  /// *permission* (`ACCESS_FINE_LOCATION`): `true` on Android below API 31,
+  /// `false` from API 31 up and on iOS.
+  ///
+  /// Ask this before requesting the permission, when you need to show a
+  /// rationale first. It answers a different question from
+  /// [isLocationServiceEnabled]: this one is about the *permission* the
+  /// scan needs, that one about whether the location *service* is currently
+  /// blocking the scan. On a pre-31 device with the permission granted but
+  /// the service switched off, this returns `true` and
+  /// [isLocationServiceEnabled] returns `false`.
+  ///
+  /// The API-level threshold stays inside printly deliberately, so an
+  /// application does not have to keep its own copy of it — and does not
+  /// have to carry a device-info dependency to read the SDK level.
+  Future<bool> isLocationRequired() {
+    return PrintlyPlatform.instance.isLocationRequired();
+  }
+
   /// Opens the system location settings page so the user can turn the
   /// location service on.
   ///
@@ -264,6 +283,18 @@ class Printly {
   /// `false` as a no-op on iOS — this SDK does not touch CoreLocation, since
   /// creating a location manager would raise a permission question printly
   /// has no business asking.
+  ///
+  /// This SDK deliberately cannot turn the location service on *in place*,
+  /// the way [requestEnableBluetooth] can for the radio: the in-app dialog
+  /// is a Play Services feature (`SettingsClient.checkLocationSettings` plus
+  /// `startResolutionForResult`), and depending on Play Services would put
+  /// weight on every consumer for something that does not work at all on
+  /// GMS-less hardware — Huawei devices and the industrial Android terminals
+  /// this package is aimed at. If you do want the in-place dialog, an app
+  /// that already depends on `geolocator` gets it from
+  /// `getCurrentPosition()`, which triggers the Play Services resolution
+  /// flow on Android; you can discard the position it returns and read the
+  /// outcome back through [isLocationServiceEnabled].
   Future<bool> openLocationSettings() {
     return PrintlyPlatform.instance.openLocationSettings();
   }
