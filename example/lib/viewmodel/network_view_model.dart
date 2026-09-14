@@ -25,6 +25,24 @@ class NetworkViewModel extends ChangeNotifier {
   /// Default raw-printing port for ESC/POS network printers.
   static const int kDefaultPort = 9100;
 
+  /// Advance the ticket until the notch sits under the printing line.
+  ///
+  /// One of three commands from Custom's own command set (KPM180H/TK180
+  /// command manual 915AH020300700, "Alignment"). They have no standard
+  /// ESC/POS equivalent: `GS FF`, the usual "feed to black mark", is answered
+  /// with COMMAND ERROR on this firmware.
+  static const List<int> _alignToPrintHead = <int>[0x1D, 0xF6];
+
+  /// Advance the ticket until the notch sits under the cutting line.
+  static const List<int> _alignToCutter = <int>[0x1D, 0xF8];
+
+  /// Total cut. Custom's command manual does not document `GS V` at all —
+  /// which is the cut printly emits for [PrintConfig.cutAfterPrint] and
+  /// [PrintJob.cut], so on this device that cut never lands and the paper is
+  /// left mid-ticket. Every later job then starts misaligned, which is what
+  /// made receipts straddle the perforations.
+  static const List<int> _totalCut = <int>[0x1B, 0x69];
+
   final ActionLogViewModel _log;
   final SettingsViewModel _settings;
 
@@ -33,6 +51,8 @@ class NetworkViewModel extends ChangeNotifier {
   ConnectionState _state = ConnectionState.disconnected;
   bool _busy = false;
   bool _started = false;
+  bool _ticketMode = false;
+  bool _alignedSinceConnect = false;
   final List<String> _recents = <String>[];
 
   StreamSubscription<ConnectionState>? _stateSub;
@@ -82,6 +102,42 @@ class NetworkViewModel extends ChangeNotifier {
 
   /// Whether a print can be sent now.
   bool get canPrint => _state == ConnectionState.connected && !_busy;
+
+  /// Whether to wrap each job in Custom's ticket-alignment commands.
+  ///
+  /// Turn this on for fixed-length pre-notched ticket stock (a Custom TK180
+  /// and its kin), where every job has to start at a ticket's top edge and be
+  /// cut on its boundary. Leave it off for continuous roll paper, where there
+  /// is no notch to align to and these commands would simply stall waiting for
+  /// a mark that never arrives.
+  bool get ticketMode => _ticketMode;
+
+  set ticketMode(bool value) {
+    if (_ticketMode == value) return;
+    _ticketMode = value;
+    // Switching modes says nothing about where the paper stopped, so the next
+    // ticket job re-aligns rather than assuming.
+    _alignedSinceConnect = false;
+    notifyListeners();
+  }
+
+  /// Whether the next ticket job has to open with the align-to-print-head
+  /// command (`GS F6`).
+  ///
+  /// True only for the first job after connecting. `ESC i` already retracts
+  /// the paper to the next ticket's top edge, so sending `GS F6` again on
+  /// already-aligned paper advances a whole extra ticket — measured on a
+  /// TK180: identical jobs printed one ticket without it and one ticket plus
+  /// a blank with it. The first job of a session still needs it, because a
+  /// reload can leave the paper anywhere.
+  bool get needsTicketAlignment => _ticketMode && !_alignedSinceConnect;
+
+  /// Records that the paper is now notch-aligned, so later jobs skip `GS F6`.
+  void markTicketAligned() => _alignedSinceConnect = true;
+
+  /// Re-arms [needsTicketAlignment]. Called on every connect, where the paper
+  /// may have been reloaded while the socket was closed.
+  void resetTicketAlignment() => _alignedSinceConnect = false;
 
   /// Begins observing the connection state of the current device.
   ///
@@ -137,6 +193,7 @@ class NetworkViewModel extends ChangeNotifier {
     notifyListeners();
     try {
       await Printly.instance.connect(d);
+      resetTicketAlignment();
       _log.success('network connect → ${d.address}');
       _remember(d.address);
     } catch (error) {
@@ -184,8 +241,8 @@ class NetworkViewModel extends ChangeNotifier {
   /// [PrintJob.textRaster] renders through the engine and must be awaited — a
   /// raster receipt cannot be expressed as a template.
   Future<void> printTurkishRaster() => _send('turkish raster', () async {
-    final PrintJob job = await Printly.instance.newJob(
-      config: PrintConfig(
+    final PrintJob job = await _newJob(
+      PrintConfig(
         paperWidth: _settings.paperWidth,
         feedLines: 3,
         cutAfterPrint: true,
@@ -219,24 +276,56 @@ class NetworkViewModel extends ChangeNotifier {
   /// A short receipt that ends in a cut — verifies the cutter, and on a
   /// printer without one shows up as roughly 25 mm of blank feed instead.
   Future<void> printCutTest() => _send('cut', () async {
-    final PrintJob job = await Printly.instance.newJob(
-      paperWidth: _settings.paperWidth,
+    final PrintJob job = await _newJob(
+      PrintConfig(paperWidth: _settings.paperWidth),
     );
     job
       ..text('cut test', align: PrintlyTextAlign.center)
-      ..feed(2)
-      ..cut();
+      ..feed(2);
+    // In ticket mode the cut is Custom's `ESC i`, appended by [_send] after
+    // the align-to-cutter command. Calling printly's cut() here as well would
+    // emit a `GS V` this device answers with COMMAND ERROR.
+    if (!_ticketMode) job.cut();
     return job;
   });
 
   Future<void> _run(String label, ReceiptTemplate template) =>
       _send(label, () async {
-        final PrintJob job = await Printly.instance.newJob(
-          config: template.config,
-        );
+        final PrintJob job = await _newJob(template.config);
         template.build(job);
         return job;
       });
+
+  /// Creates the job every test prints through.
+  ///
+  /// In [ticketMode] it does two things the plain `newJob` cannot: it drops
+  /// printly's automatic `GS V` cut, which this device does not implement, and
+  /// it opens the job with the align-to-print-head command so the first line
+  /// lands on the ticket's top edge instead of wherever the previous job
+  /// stopped.
+  Future<PrintJob> _newJob(PrintConfig config) async {
+    final PrintJob job = await Printly.instance.newJob(
+      config: _ticketMode ? ticketJobConfig(config) : config,
+    );
+    if (needsTicketAlignment) {
+      job.raw(_alignToPrintHead);
+      markTicketAligned();
+    }
+    return job;
+  }
+
+  /// Rewrites a roll-paper [config] for notched ticket stock.
+  ///
+  /// Two of the encoder's finalisers have to go. `cutAfterPrint` emits `GS V`,
+  /// which this device does not implement. `feedLines` is the subtler one:
+  /// [PrintJob.build] appends it *after* the job body, and the body is where
+  /// [_send] put the align-to-cutter command and the `ESC i` cut — so the feed
+  /// lands after the cut and pushes the paper past the notch the blade just
+  /// used. The next job's `GS F6` then skips that half-fed ticket, which comes
+  /// out blank. On ticket stock the alignment command is the only trailing
+  /// feed a job needs; on roll paper the original config stays as it is.
+  static PrintConfig ticketJobConfig(PrintConfig config) =>
+      config.copyWith(cutAfterPrint: false, feedLines: 0);
 
   /// Shared print plumbing: the connected guard, the busy flag, the log line
   /// and the `finally` that re-enables the buttons however the job ends. Only
@@ -250,6 +339,14 @@ class NetworkViewModel extends ChangeNotifier {
     notifyListeners();
     try {
       final PrintJob job = await buildJob();
+      if (_ticketMode) {
+        // Order is Custom's, not ours: align to the cutter first, then cut.
+        // Cutting without the alignment leaves the blade wherever the content
+        // happened to end, which is the mid-ticket fragment this replaces.
+        job
+          ..raw(_alignToCutter)
+          ..raw(_totalCut);
+      }
       await Printly.instance.print(d, job);
       _log.success('network print $label → ${d.address}');
     } catch (error) {

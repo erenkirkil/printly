@@ -70,4 +70,20 @@ void main() {
     expect(vm.state, ConnectionState.disconnected);
     expect(vm.canPrint, isFalse);
   });
+
+  test('ticketMode defaults to off so roll-paper printers are unaffected', () {
+    expect(vm.ticketMode, isFalse);
+  });
+
+  test(
+    'setting ticketMode notifies once, and not again for the same value',
+    () {
+      int notifications = 0;
+      vm.addListener(() => notifications++);
+      vm.ticketMode = true;
+      vm.ticketMode = true;
+      expect(vm.ticketMode, isTrue);
+      expect(notifications, 1);
+    },
+  );
 }

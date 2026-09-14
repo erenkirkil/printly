@@ -25,7 +25,18 @@ class NetworkTab extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           children: <Widget>[
             NetworkConnectCard(vm: vm),
-            const SizedBox(height: 24),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: vm.ticketMode,
+              onChanged: (bool v) => vm.ticketMode = v,
+              title: const Text('Ticket mode (notched stock)'),
+              subtitle: const Text(
+                'Aligns each job to the ticket notch and cuts on the boundary '
+                'with Custom\'s ESC i. Leave off for continuous roll paper.',
+              ),
+            ),
+            const SizedBox(height: 12),
             Text('Test prints', style: theme.textTheme.titleMedium),
             const SizedBox(height: 4),
             Text(
