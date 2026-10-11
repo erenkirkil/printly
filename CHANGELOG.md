@@ -47,6 +47,12 @@
   `android.builtInKotlin=true`, an AGP 9 app that still applies KGP itself
   with `builtInKotlin=false`, and an AGP 8 app.
 
+- **Minimum iOS is now 15.0; was 13.0** (`printly.podspec` and
+  `Package.swift`). Current Xcode no longer accepts a deployment target
+  below 15.0, so an app built with it already targets 15.0 or higher and
+  nothing changes in practice; an app still targeting iOS 13 or 14 must
+  raise its own deployment target to resolve this version.
+
 - The Android module now compiles against Java 17 and Kotlin `jvmTarget`
   17 (was 11). Building the plugin therefore needs a JDK 17 or newer
   toolchain. Every Flutter release this package supports already requires
