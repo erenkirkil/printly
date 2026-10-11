@@ -8,6 +8,13 @@ analyzer:
   errors:
     missing_required_param: error
     missing_return: error
+  # Written out so Flutter 3.47's analysis-options migrator finds nothing to
+  # add during `pub get`; otherwise it rewrites this file and `pub publish
+  # --dry-run` fails its clean-git check.
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
 
 linter:
   rules:
