@@ -22,8 +22,8 @@ jobs:
           # The floor declared in pubspec.yaml. Without this, reaching for an
           # API or syntax that only exists in a newer SDK silently breaks the
           # minimum the package promises — and nothing here would notice.
-          - label: floor 3.35.3
-            flutter-version: "3.35.3"
+          - label: floor 3.44.0
+            flutter-version: "3.44.0"
           # Whatever stable is today. This is the end that caught
           # `use_null_aware_elements`: a new analyzer lint on code that had
           # been fine for months. Dependencies also resolve fresh here, since

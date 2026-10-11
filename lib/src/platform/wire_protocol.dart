@@ -56,6 +56,15 @@ abstract final class WireProtocol {
   /// for scanning; `true` elsewhere).
   static const String mIsLocationServiceEnabled = 'isLocationServiceEnabled';
 
+  /// Whether Bluetooth scanning on this device needs the location
+  /// *permission* — Android below API 31. Distinct from
+  /// [mIsLocationServiceEnabled], which reports whether the location
+  /// *service* is currently blocking a scan. Consumers need this to decide
+  /// whether to show a location rationale before asking for the permission,
+  /// and without it they re-derive the API-level threshold themselves —
+  /// the same truth in two places, drifting the moment printly changes it.
+  static const String mIsLocationRequired = 'isLocationRequired';
+
   /// Opens the system location settings page (Android only).
   static const String mOpenLocationSettings = 'openLocationSettings';
 

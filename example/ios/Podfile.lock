@@ -4,7 +4,7 @@ PODS:
     - Flutter
   - permission_handler_apple (9.3.0):
     - Flutter
-  - printly (0.1.0):
+  - printly (0.3.0):
     - Flutter
   - shared_preferences_foundation (0.0.1):
     - Flutter
@@ -33,7 +33,7 @@ SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
   permission_handler_apple: 4ed2196e43d0651e8ff7ca3483a069d469701f2d
-  printly: 90a8140f48c07fd33ca13895ef5ef923bf3553ec
+  printly: 27f7a0ed0997e52d102b600948b609f55a32292b
   shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
 
 PODFILE CHECKSUM: c04614a582615c3631f27c419086318416536197

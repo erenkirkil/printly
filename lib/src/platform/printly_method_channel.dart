@@ -130,6 +130,22 @@ class MethodChannelPrintly extends PrintlyPlatform {
   }
 
   @override
+  Future<bool> isLocationRequired() async {
+    try {
+      final bool? required = await methodChannel.invokeMethod<bool>(
+        WireProtocol.mIsLocationRequired,
+      );
+      // Absent means "no native answer" — assume the permission is not
+      // required rather than pushing an application into showing a location
+      // rationale it may not need. The scan itself still fails loudly if the
+      // permission turns out to be missing.
+      return required ?? false;
+    } on PlatformException catch (error) {
+      throw _toPrintlyException(error, _ErrorDomain.scan);
+    }
+  }
+
+  @override
   Future<bool> openLocationSettings() async {
     try {
       final bool? opened = await methodChannel.invokeMethod<bool>(

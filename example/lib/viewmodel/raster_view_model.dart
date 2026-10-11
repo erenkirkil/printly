@@ -17,11 +17,7 @@ import 'settings_view_model.dart';
 /// actually readable on paper — but a preview of the real dithered output can,
 /// without spending any.
 class RasterViewModel extends ChangeNotifier {
-  RasterViewModel({
-    required ActionLogViewModel log,
-    required SettingsViewModel settings,
-  }) : _log = log,
-       _settings = settings;
+  RasterViewModel({required this._log, required this._settings});
 
   final ActionLogViewModel _log;
   final SettingsViewModel _settings;

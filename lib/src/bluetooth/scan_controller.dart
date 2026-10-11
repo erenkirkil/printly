@@ -96,9 +96,8 @@ class ScanController {
   /// (see [kScanEmitInterval]); tests pass [Duration.zero] for immediacy.
   ScanController({
     PrintlyPlatform? platform,
-    Duration emitInterval = kScanEmitInterval,
-  }) : _platform = platform ?? PrintlyPlatform.instance,
-       _emitInterval = emitInterval {
+    this._emitInterval = kScanEmitInterval,
+  }) : _platform = platform ?? PrintlyPlatform.instance {
     _resultsSubscription = _platform.scanResults.listen(
       _onDeviceDiscovered,
       onError: _onScanError,

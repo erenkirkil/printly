@@ -419,6 +419,12 @@ before the apps that depend on it:
   `Package.swift` (used automatically by Flutter 3.44+, where SPM is the
   default) and a `.podspec`, so CocoaPods-based apps keep working
   unchanged during the transition.
+- **Built-in Kotlin (AGP 9)** — printly does not apply the Kotlin Gradle
+  Plugin; Kotlin is compiled by the Android Gradle Plugin itself, so it never
+  appears in Flutter's "plugins that apply KGP" warning and does not stop
+  your app from setting `android.builtInKotlin=true`. Apps that still apply
+  KGP themselves, or are on AGP 8, build it unchanged. This is why printly
+  requires Flutter 3.44 or newer.
 - **Android 16 KB page sizes** — printly's Android side is pure Kotlin and
   ships **no native (`.so`) binaries**, so the plugin itself is 16 KB
   compatible as-is (Google Play requires 16 KB support for new apps and

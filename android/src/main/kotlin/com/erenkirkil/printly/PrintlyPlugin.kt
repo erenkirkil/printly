@@ -114,6 +114,11 @@ class PrintlyPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
             WireCodes.Methods.WRITE -> handleWrite(call, result)
             WireCodes.Methods.IS_LOCATION_SERVICE_ENABLED ->
                 result.success(LocationServices.isSatisfied(appContext))
+            WireCodes.Methods.IS_LOCATION_REQUIRED ->
+                // The permission question, not the service question: below
+                // API 31 a scan needs ACCESS_FINE_LOCATION, from 31 up the
+                // BLUETOOTH_SCAN/neverForLocation declaration replaces it.
+                result.success(LocationServices.isRequired())
             WireCodes.Methods.OPEN_LOCATION_SETTINGS ->
                 result.success(openLocationSettings())
             else -> result.notImplemented()

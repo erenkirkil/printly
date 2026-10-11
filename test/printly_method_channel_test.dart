@@ -40,6 +40,8 @@ void main() {
               return true;
             case 'isLocationServiceEnabled':
               return false;
+            case 'isLocationRequired':
+              return true;
             case 'openLocationSettings':
               return true;
             default:
@@ -102,6 +104,14 @@ void main() {
     () async {
       expect(await platform.isLocationServiceEnabled(), isFalse);
       expect(invocations.single.method, 'isLocationServiceEnabled');
+    },
+  );
+
+  test(
+    'isLocationRequired invokes the wire method and returns the flag',
+    () async {
+      expect(await platform.isLocationRequired(), isTrue);
+      expect(invocations.single.method, 'isLocationRequired');
     },
   );
 

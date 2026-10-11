@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'printly'
-  s.version          = '0.2.0'
+  s.version          = '0.4.0'
   s.summary          = 'Thermal printer SDK for Flutter.'
   s.description      = <<-DESC
 Thermal printer SDK for Flutter. On iOS this pod provides BLE scanning,
@@ -21,7 +21,7 @@ devices; the network (TCP/9100) transport is planned post-v1.
   # podspec for CocoaPods consumers during the transition period.
   s.source_files = 'printly/Sources/printly/**/*.swift'
   s.dependency 'Flutter'
-  s.platform = :ios, '13.0'
+  s.platform = :ios, '15.0'
 
   # Flutter.framework does not contain a i386 slice.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }

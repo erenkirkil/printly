@@ -2,7 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:printly/printly.dart';
 import 'package:printly/src/platform/printly_method_channel.dart';
-import 'package:printly/src/platform/printly_platform_interface.dart';
 
 class _MockPrintlyPlatform extends PrintlyPlatform
     with MockPlatformInterfaceMixin {

@@ -7,7 +7,7 @@ import 'action_log_view_model.dart';
 
 /// Adapter state, runtime permissions and the OS settings shortcuts.
 class BluetoothViewModel extends ChangeNotifier {
-  BluetoothViewModel({required ActionLogViewModel log}) : _log = log;
+  BluetoothViewModel({required this._log});
 
   final ActionLogViewModel _log;
 

@@ -52,6 +52,7 @@ void main() {
     WireProtocol.mDisconnect,
     WireProtocol.mWrite,
     WireProtocol.mIsLocationServiceEnabled,
+    WireProtocol.mIsLocationRequired,
     WireProtocol.mOpenLocationSettings,
   };
   const Set<String> dartKeys = <String>{

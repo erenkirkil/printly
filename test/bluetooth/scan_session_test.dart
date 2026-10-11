@@ -5,7 +5,6 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:printly/printly.dart';
 import 'package:printly/src/bluetooth/scan_controller.dart';
 import 'package:printly/src/bluetooth/scan_session.dart';
-import 'package:printly/src/platform/printly_platform_interface.dart';
 
 /// Reuses the fake-platform pattern from scan_controller_test.dart: a
 /// minimal [PrintlyPlatform] fake that lets tests emit discoveries and count

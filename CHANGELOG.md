@@ -1,3 +1,82 @@
+## 0.4.0 — 2026-10-11
+
+### Added
+
+- `isLocationRequired()` reports whether Bluetooth scanning on this device
+  needs the location *permission* — `true` on Android below API 31, `false`
+  from API 31 up and on iOS. The native side already knew this (it is the
+  same `SDK_INT < S` check that decides which permissions printly requests)
+  but never exposed it, so an application that had to show a permission
+  rationale before asking for `ACCESS_FINE_LOCATION` re-derived the API-level
+  threshold itself, usually by adding a device-info dependency. That put the
+  same truth in two places, free to drift the moment printly moved its own
+  threshold. The threshold now stays inside the package.
+
+  It answers a different question from `isLocationServiceEnabled()`, which
+  reports whether the location *service* is currently blocking a scan: on a
+  pre-31 device with the permission granted and the service switched off,
+  `isLocationRequired()` is `true` and `isLocationServiceEnabled()` is
+  `false`. Custom platform implementations get a default that throws
+  `UnimplementedError`, so nothing breaks until they choose to override it.
+
+- `PrintlyPlatform` is now exported from `package:printly/printly.dart`. It
+  was always designed to be faked — it extends `PlatformInterface` with the
+  usual token guard, and printly's own tests install fakes through it — but
+  it was never reachable from the barrel, so an app could not test its own
+  logic against a fake printer. The two workarounds left in the field were
+  both bad: importing `package:printly/src/…` trips the
+  `implementation_imports` lint and couples the app to internals, while
+  stubbing the raw `MethodChannel('printly')` hard-codes channel names and
+  wire codes into the app's tests — and those stubs do not break when the
+  wire changes, they silently start measuring the wrong thing.
+  Extend `PrintlyPlatform` (do not implement it) so future additions stay
+  non-breaking, as the class doc says.
+
+### Changed
+
+- **Minimum Flutter is now 3.44.0 (Dart 3.12.0); was 3.35.3.** The Android
+  module migrated to built-in Kotlin: it no longer applies the Kotlin Gradle
+  Plugin (`kotlin-android`) and leaves compiling Kotlin to the Android Gradle
+  Plugin. Flutter 3.47 warns about every plugin that still applies KGP —
+  printly was on that list — and a future Flutter will fail the build
+  outright; a plugin that applies KGP also blocks its host app from turning
+  on `android.builtInKotlin=true`. Flutter 3.44 is the first release that
+  builds such a plugin, so the floor moves with it; projects on an older
+  Flutter keep resolving 0.3.0. No change is needed in the host app: the
+  plugin was built and verified in an app on AGP 9 with
+  `android.builtInKotlin=true`, an AGP 9 app that still applies KGP itself
+  with `builtInKotlin=false`, and an AGP 8 app.
+
+- **Minimum iOS is now 15.0; was 13.0** (`printly.podspec` and
+  `Package.swift`). Current Xcode no longer accepts a deployment target
+  below 15.0, so an app built with it already targets 15.0 or higher and
+  nothing changes in practice; an app still targeting iOS 13 or 14 must
+  raise its own deployment target to resolve this version.
+
+- The Android module now compiles against Java 17 and Kotlin `jvmTarget`
+  17 (was 11). Building the plugin therefore needs a JDK 17 or newer
+  toolchain. Every Flutter release this package supports already requires
+  JDK 17 for Android builds, so in practice nothing changes, but a project
+  pinned to an older JDK will see a Gradle toolchain error rather than
+  anything printly-specific, so it is called out here. `compileSdk` (36) and
+  `minSdk` (24) are unchanged. The example app moved to AGP 9.1 / Gradle 9.3
+  and drops the `android.enableJetifier` flag: nothing in the dependency
+  graph pulls a pre-AndroidX support-library artifact any more, so the
+  rewrite step was doing nothing but slowing builds down.
+
+### Fixed
+
+- `ios/printly.podspec` now carries the same version as `pubspec.yaml`. It
+  was left at `0.2.0` when 0.3.0 shipped, so CocoaPods reported the wrong
+  version to consumers and — more importantly — had no signal that the
+  plugin had changed at all: a `Podfile.lock` `SPEC CHECKSUMS` entry hashes
+  the podspec file, not the sources it points at. 0.3.0 still compiled
+  correctly on iOS only because the Swift file *set* happened to be
+  unchanged; a release that adds or removes a source file would have left
+  consumers building a stale file list with no error. A test
+  (`test/packaging_version_test.dart`) now compares the two manifests, and
+  the release checklist bumps the podspec alongside the pubspec.
+
 ## 0.3.0 — 2026-08-07
 
 ### Breaking

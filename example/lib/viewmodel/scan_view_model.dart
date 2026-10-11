@@ -8,7 +8,7 @@ import 'action_log_view_model.dart';
 /// Discovery and connection lifecycle: the device list, the scan toggle and
 /// connect/disconnect.
 class ScanViewModel extends ChangeNotifier {
-  ScanViewModel({required ActionLogViewModel log}) : _log = log;
+  ScanViewModel({required this._log});
 
   final ActionLogViewModel _log;
 
