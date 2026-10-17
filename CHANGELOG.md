@@ -18,6 +18,19 @@
   than through printly; the printly-driven round on that printer is still
   queued.
 
+- **LAN thermal printer discovery (`discoverNetworkPrinters`).** Sweeps the
+  local RFC 1918 IPv4 `/24` subnet (or a caller-supplied `subnet` / `hosts`
+  list) on TCP port 9100 (`kDefaultNetworkPort`) with a bounded concurrent
+  worker pool (`kDefaultNetworkDiscoveryConcurrency = 48`,
+  `kDefaultNetworkProbeTimeout = 200 ms`, ~1.2 s for a full 254-host `/24`).
+  Probes use a **zero-write TCP handshake** (`Socket.connect` followed
+  immediately by `Socket.destroy()`) so non-ESC/POS office printers on port
+  9100 never print probe bytes as garbage pages and printers that reject
+  unknown commands never print `COMMAND ERROR`. Already-connected network
+  printers held by the same `Printly` instance are included without opening a
+  second TCP connection, protecting single-socket embedded Ethernet stacks
+  (`lwIP` / W5500).
+
 ## 0.4.0 — 2026-10-11
 
 ### Added

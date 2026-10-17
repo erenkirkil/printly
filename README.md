@@ -331,6 +331,17 @@ await printly.print(printer, job);
 await printly.disconnect(device: printer);
 ```
 
+When a printer uses DHCP — or moves to a different wall port / router lease —
+sweep the local `/24` LAN on port 9100 (~1.2 s with default settings):
+
+```dart
+final printers = await printly.discoverNetworkPrinters();
+// Every responsive host on TCP/9100 is returned as a PrintlyDevice.network.
+// Probes are zero-write TCP handshakes (Socket.destroy()), so non-ESC/POS
+// printers on port 9100 never print garbage bytes and already-connected
+// single-socket printers are preserved without opening a second socket.
+```
+
 `connect()` completing means the **socket is open**, not that the printer is
 ready — TCP gives no readiness signal the way BLE service discovery does.
 

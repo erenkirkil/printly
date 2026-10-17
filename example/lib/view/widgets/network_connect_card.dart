@@ -123,6 +123,35 @@ class _NetworkConnectCardState extends State<NetworkConnectCard> {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: vm.canScan ? vm.scanNetwork : null,
+              icon: const Icon(Icons.radar),
+              label: Text(
+                vm.scanning
+                    ? 'Scanning LAN (port ${vm.port})...'
+                    : 'Scan LAN (port ${vm.port})',
+              ),
+            ),
+            if (vm.discovered.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 12),
+              Text('Discovered on LAN', style: theme.textTheme.labelLarge),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 8,
+                children: vm.discovered
+                    .map(
+                      (PrintlyDevice d) => ActionChip(
+                        avatar: const Icon(Icons.print_outlined, size: 16),
+                        label: Text(d.address),
+                        onPressed: connected
+                            ? null
+                            : () => vm.useRecent(d.address),
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
+            ],
             if (vm.recents.isNotEmpty) ...<Widget>[
               const SizedBox(height: 12),
               Text('Recent', style: theme.textTheme.labelLarge),

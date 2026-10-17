@@ -448,5 +448,61 @@ void main() {
       await printly.connect(net);
       await printly.disconnect(device: net);
     });
+
+    test(
+      'discoverNetworkPrinters finds a loopback listener and preserves an '
+      'already-connected single-socket printer without re-dialing it',
+      () async {
+        int acceptCount = 0;
+        final ServerSocket singleSocketPrinter = await ServerSocket.bind(
+          InternetAddress.loopbackIPv4,
+          0,
+        );
+        final StreamSubscription<Socket> sub = singleSocketPrinter.listen((
+          Socket s,
+        ) {
+          acceptCount++;
+        });
+        addTearDown(() async {
+          await sub.cancel();
+          await singleSocketPrinter.close();
+        });
+
+        final Printly printly = Printly.forTesting();
+
+        // 1. Unconnected discovery probes the port once and finds the printer.
+        final List<PrintlyDevice> beforeConnect = await printly
+            .discoverNetworkPrinters(
+              hosts: <String>['127.0.0.1'],
+              port: singleSocketPrinter.port,
+            );
+        expect(beforeConnect.length, 1);
+        expect(
+          beforeConnect.single.address,
+          '127.0.0.1:${singleSocketPrinter.port}',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(acceptCount, 1);
+
+        // 2. Connect to the discovered printer (acceptCount becomes 2).
+        await printly.connect(beforeConnect.single);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(acceptCount, 2);
+
+        // 3. Running discoverNetworkPrinters while connected must still include
+        //    the active printer WITHOUT opening a third TCP connection.
+        final List<PrintlyDevice> whileConnected = await printly
+            .discoverNetworkPrinters(
+              hosts: <String>['127.0.0.1'],
+              port: singleSocketPrinter.port,
+            );
+        expect(whileConnected.length, 1);
+        expect(whileConnected.single.address, beforeConnect.single.address);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(acceptCount, 2);
+
+        await printly.disconnect(device: beforeConnect.single);
+      },
+    );
   });
 }

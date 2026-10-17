@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:printly/printly.dart';
 import 'package:printly_example/viewmodel/action_log_view_model.dart';
@@ -86,4 +88,151 @@ void main() {
       expect(notifications, 1);
     },
   );
+
+  group('persistence & LAN discovery / auto-recovery', () {
+    test('restoreLastDevice populates host, port, and recents when last device '
+        'was a network printer', () async {
+      final NetworkViewModel customVm = NetworkViewModel(
+        log: log,
+        settings: settings,
+        loadLastDevice: () async =>
+            PrintlyDevice.network(host: '192.168.0.214', port: 9100),
+      );
+      addTearDown(customVm.dispose);
+
+      await customVm.restoreLastDevice();
+
+      expect(customVm.host, '192.168.0.214');
+      expect(customVm.port, 9100);
+      expect(customVm.recents, <String>['192.168.0.214:9100']);
+    });
+
+    test(
+      'restoreLastDevice ignores a Bluetooth last-connected device',
+      () async {
+        final NetworkViewModel customVm = NetworkViewModel(
+          log: log,
+          settings: settings,
+          loadLastDevice: () async => PrintlyDevice(
+            name: 'PTP-II',
+            address: 'AA:BB:CC:DD:EE:FF',
+            availableTransports: const <ConnectionType>{ConnectionType.classic},
+          ),
+        );
+        addTearDown(customVm.dispose);
+
+        await customVm.restoreLastDevice();
+
+        expect(customVm.host, isEmpty);
+        expect(customVm.recents, isEmpty);
+      },
+    );
+
+    test(
+      'restoreLastDevice never clobbers a host the user already typed',
+      () async {
+        final Completer<PrintlyDevice?> completer = Completer<PrintlyDevice?>();
+        final NetworkViewModel customVm = NetworkViewModel(
+          log: log,
+          settings: settings,
+          loadLastDevice: () => completer.future,
+        );
+        addTearDown(customVm.dispose);
+
+        final Future<void> restore = customVm.restoreLastDevice();
+        // User starts typing before storage resolves.
+        customVm.host = '10.0.0.50';
+        completer.complete(
+          PrintlyDevice.network(host: '192.168.0.214', port: 9100),
+        );
+        await restore;
+
+        expect(customVm.host, '10.0.0.50');
+      },
+    );
+
+    test('scanNetwork populates discovered printers and auto-fills host when '
+        'a single printer is found', () async {
+      final NetworkViewModel customVm = NetworkViewModel(
+        log: log,
+        settings: settings,
+        discoverPrinters: ({required int port}) async => <PrintlyDevice>[
+          PrintlyDevice.network(host: '192.168.0.105', port: port),
+        ],
+      );
+      addTearDown(customVm.dispose);
+
+      await customVm.scanNetwork();
+
+      expect(customVm.discovered.length, 1);
+      expect(customVm.discovered.single.address, '192.168.0.105:9100');
+      expect(customVm.host, '192.168.0.105');
+      expect(customVm.port, 9100);
+    });
+
+    test('connect auto-recovers when the saved IP is stale and a single '
+        'printer is discovered at a new DHCP IP on the LAN', () async {
+      final List<String> connectAttempts = <String>[];
+      final NetworkViewModel customVm = NetworkViewModel(
+        log: log,
+        settings: settings,
+        connectDevice: (PrintlyDevice d) async {
+          connectAttempts.add(d.address);
+          if (d.address == '192.168.0.214:9100') {
+            throw const PrintlyConnectionException(
+              PrintlyErrorCode.connectTimeout,
+              'stale IP timed out',
+            );
+          }
+        },
+        discoverPrinters: ({required int port}) async => <PrintlyDevice>[
+          PrintlyDevice.network(host: '192.168.0.105', port: port),
+        ],
+      );
+      addTearDown(customVm.dispose);
+
+      customVm.host = '192.168.0.214';
+      await customVm.connect();
+
+      expect(connectAttempts, <String>[
+        '192.168.0.214:9100',
+        '192.168.0.105:9100',
+      ]);
+      expect(customVm.host, '192.168.0.105');
+      expect(customVm.recents.first, '192.168.0.105:9100');
+    });
+
+    test('connect does not auto-connect when multiple printers are discovered '
+        'during stale-IP recovery', () async {
+      final List<String> connectAttempts = <String>[];
+      final NetworkViewModel customVm = NetworkViewModel(
+        log: log,
+        settings: settings,
+        connectDevice: (PrintlyDevice d) async {
+          connectAttempts.add(d.address);
+          throw const PrintlyConnectionException(
+            PrintlyErrorCode.connectTimeout,
+            'stale IP timed out',
+          );
+        },
+        discoverPrinters: ({required int port}) async => <PrintlyDevice>[
+          PrintlyDevice.network(host: '192.168.0.105', port: port),
+          PrintlyDevice.network(host: '192.168.0.106', port: port),
+        ],
+      );
+      addTearDown(customVm.dispose);
+
+      customVm.host = '192.168.0.214';
+      await customVm.connect();
+
+      // Only the initial attempt was made; both candidates are surfaced in
+      // `discovered` so the user can choose rather than printing to the wrong
+      // counter.
+      expect(connectAttempts, <String>['192.168.0.214:9100']);
+      expect(
+        customVm.discovered.map((PrintlyDevice d) => d.address).toList(),
+        <String>['192.168.0.105:9100', '192.168.0.106:9100'],
+      );
+    });
+  });
 }

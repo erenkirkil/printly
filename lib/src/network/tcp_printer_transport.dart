@@ -74,6 +74,13 @@ class TcpPrinterTransport {
   /// Broadcast stream of connection lifecycle events for network devices.
   Stream<PrintlyConnectionEvent> get events => _events.stream;
 
+  /// Canonical `host:port` addresses of every currently open TCP session.
+  ///
+  /// Used by `NetworkPrinterDiscovery` so a subnet sweep never opens a second
+  /// socket against a single-socket printer that is already connected.
+  Set<String> get openAddresses =>
+      _sessions.values.map((_TcpSession s) => s.canonicalAddress).toSet();
+
   /// Opens a socket to [device] and reports the outcome on [events]:
   /// [ConnectionState.connected] once the socket is open,
   /// [ConnectionState.error] with the mapped wire reason when the dial fails,
@@ -148,7 +155,7 @@ class TcpPrinterTransport {
         socket.destroy();
         return;
       }
-      final _TcpSession session = _TcpSession(socket);
+      final _TcpSession session = _TcpSession(socket, addr.canonical);
       _sessions[key] = session;
       // Watch for remote close / socket error → one disconnected event.
       session.subscription = socket.listen(
@@ -384,9 +391,10 @@ class TcpPrinterTransport {
 /// remote-close handler whether the close was initiated locally (so it does
 /// not emit a second event).
 class _TcpSession {
-  _TcpSession(this.socket);
+  _TcpSession(this.socket, this.canonicalAddress);
 
   final Socket socket;
+  final String canonicalAddress;
 
   /// Assigned immediately after [socket] is listened to; cleared on teardown.
   /// Held so the close path can cancel it — dropping the reference alone

@@ -15,6 +15,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   const List<String> pureFiles = <String>[
     'lib/src/network/network_address.dart',
+    'lib/src/network/network_discovery.dart',
     'lib/src/network/tcp_printer_transport.dart',
   ];
 

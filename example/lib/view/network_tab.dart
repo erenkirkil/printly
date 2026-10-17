@@ -5,10 +5,8 @@ import '../viewmodel/settings_view_model.dart';
 import 'widgets/network_connect_card.dart';
 
 /// Everything a network (Ethernet/Wi-Fi) printer needs in one screen: the
-/// address, the connection, and the prints used to qualify a new device.
-///
-/// Network printers are not discoverable — there is no scan — so they get
-/// their own tab rather than sharing the Bluetooth-shaped Scan tab.
+/// address, LAN discovery on TCP port 9100, the connection, and the prints
+/// used to qualify a new device.
 class NetworkTab extends StatelessWidget {
   const NetworkTab({required this.vm, required this.settings, super.key});
 
@@ -83,11 +81,13 @@ class NetworkTab extends StatelessWidget {
                     Text('Setup notes', style: theme.textTheme.titleSmall),
                     const SizedBox(height: 8),
                     Text(
-                      'The printer must be reachable from this device: same '
-                      'network, and a route to it. "Connected" means the TCP '
-                      'socket is open — a printer that is powered off but '
-                      'still has a DHCP lease will fail at connect, not at '
-                      'print.',
+                      'The printer must be reachable from this device on the '
+                      'same LAN. "Scan LAN" sweeps the local /24 subnet on '
+                      'TCP port 9100 with a zero-write handshake (~1.2 s). If '
+                      'a saved DHCP IP goes stale after moving the printer or '
+                      'rebooting the router, "Connect" automatically re-scans '
+                      'the LAN and switches to the new IP when a single '
+                      'printer responds.',
                       style: theme.textTheme.bodySmall,
                     ),
                     const SizedBox(height: 8),

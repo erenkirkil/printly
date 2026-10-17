@@ -69,6 +69,9 @@ class NetworkRoutingPlatform extends PrintlyPlatform {
   @override
   Stream<PrintlyConnectionEvent> get connectionEvents => _merged.stream;
 
+  /// Canonical `host:port` addresses of every currently open TCP session.
+  Set<String> get openNetworkAddresses => _tcp.openAddresses;
+
   /// Routes [ConnectionType.network] to the TCP transport and everything else
   /// to the inner platform.
   ///

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 import 'package:printly/printly.dart';
@@ -8,15 +9,43 @@ import 'action_log_view_model.dart';
 import 'settings_view_model.dart';
 
 /// Owns the whole network-printer lifecycle for the example: the address the
-/// user types, the connection state, and the qualification prints used to
-/// check a printer that has just been put on the network.
+/// user types, LAN discovery on TCP port 9100, the connection state, and the
+/// qualification prints used to check a printer that has just been put on the
+/// network.
 ///
 /// Takes plain values, not controllers — the `TextEditingController`s stay in
 /// the widget layer so this class is testable without any widget machinery.
 class NetworkViewModel extends ChangeNotifier {
   /// Creates the view model. Call [start] once mounted to begin observing
-  /// connection state; the constructor stays side-effect free.
-  NetworkViewModel({required this._log, required this._settings});
+  /// connection state and restore the last connected network printer; the
+  /// constructor stays side-effect free.
+  NetworkViewModel({
+    required this._log,
+    required this._settings,
+    Future<PrintlyDevice?> Function()? loadLastDevice,
+    Future<List<PrintlyDevice>> Function({required int port})? discoverPrinters,
+    Future<void> Function(PrintlyDevice device)? connectDevice,
+    Future<void> Function(PrintlyDevice device)? disconnectDevice,
+  }) : _loadLastDevice = loadLastDevice ?? _defaultLoadLastDevice,
+       _discoverPrinters = discoverPrinters ?? _defaultDiscoverPrinters,
+       _connectDevice = connectDevice ?? _defaultConnectDevice,
+       _disconnectDevice = disconnectDevice ?? _defaultDisconnectDevice;
+
+  // Uses the SDK's built-in last-device store while v0.5.0 still carries
+  // shared_preferences; v1.0 replaces this with app-owned persistence.
+  static Future<PrintlyDevice?> _defaultLoadLastDevice() =>
+      // ignore: deprecated_member_use
+      Printly.instance.loadLastConnectedDevice();
+
+  static Future<List<PrintlyDevice>> _defaultDiscoverPrinters({
+    required int port,
+  }) => Printly.instance.discoverNetworkPrinters(port: port);
+
+  static Future<void> _defaultConnectDevice(PrintlyDevice device) =>
+      Printly.instance.connect(device);
+
+  static Future<void> _defaultDisconnectDevice(PrintlyDevice device) =>
+      Printly.instance.disconnect(device: device);
 
   /// Default raw-printing port for ESC/POS network printers.
   static const int kDefaultPort = 9100;
@@ -41,15 +70,22 @@ class NetworkViewModel extends ChangeNotifier {
 
   final ActionLogViewModel _log;
   final SettingsViewModel _settings;
+  final Future<PrintlyDevice?> Function() _loadLastDevice;
+  final Future<List<PrintlyDevice>> Function({required int port})
+  _discoverPrinters;
+  final Future<void> Function(PrintlyDevice device) _connectDevice;
+  final Future<void> Function(PrintlyDevice device) _disconnectDevice;
 
   String _host = '';
   int _port = kDefaultPort;
   ConnectionState _state = ConnectionState.disconnected;
   bool _busy = false;
+  bool _scanning = false;
   bool _started = false;
   bool _ticketMode = false;
   bool _alignedSinceConnect = false;
   final List<String> _recents = <String>[];
+  final List<PrintlyDevice> _discovered = <PrintlyDevice>[];
 
   StreamSubscription<ConnectionState>? _stateSub;
 
@@ -80,8 +116,16 @@ class NetworkViewModel extends ChangeNotifier {
   /// Whether an action is in flight.
   bool get busy => _busy;
 
-  /// Addresses connected to earlier in this session, most recent first.
-  List<String> get recents => List<String>.unmodifiable(_recents);
+  /// Whether a LAN discovery sweep is currently running.
+  bool get scanning => _scanning;
+
+  /// Addresses connected to earlier in this session (or restored from
+  /// persistent storage), most recent first.
+  List<String> get recents => UnmodifiableListView<String>(_recents);
+
+  /// Printers found by the most recent [scanNetwork] or auto-recovery sweep.
+  List<PrintlyDevice> get discovered =>
+      UnmodifiableListView<PrintlyDevice>(_discovered);
 
   /// The device built from [host] and [port], or `null` when no host is set.
   PrintlyDevice? get device => _host.isEmpty
@@ -95,6 +139,9 @@ class NetworkViewModel extends ChangeNotifier {
   /// Whether [connect] can run now.
   bool get canConnect =>
       device != null && !_busy && _state != ConnectionState.connected;
+
+  /// Whether [scanNetwork] can run now.
+  bool get canScan => !_busy && _state != ConnectionState.connected;
 
   /// Whether a print can be sent now.
   bool get canPrint => _state == ConnectionState.connected && !_busy;
@@ -135,15 +182,70 @@ class NetworkViewModel extends ChangeNotifier {
   /// may have been reloaded while the socket was closed.
   void resetTicketAlignment() => _alignedSinceConnect = false;
 
-  /// Begins observing the connection state of the current device.
+  /// Begins observing the connection state of the current device and restores
+  /// the last connected network printer from storage.
   ///
   /// Nothing before this call touches `Printly.instance` — see [_resubscribe].
   void start() {
     _started = true;
     _resubscribe();
+    unawaited(restoreLastDevice());
   }
 
-  /// Fills [host] and [port] from a `host:port` string in [recents].
+  /// Restores the last connected network printer from persistent storage when
+  /// [host] has not been filled in by the user yet.
+  Future<void> restoreLastDevice() async {
+    try {
+      final PrintlyDevice? saved = await _loadLastDevice();
+      if (saved == null) return;
+      if (!saved.availableTransports.contains(ConnectionType.network)) return;
+      _remember(saved.address);
+      if (_host.isEmpty) {
+        useRecent(saved.address);
+      } else {
+        notifyListeners();
+      }
+    } on Object {
+      // Storage is best-effort (and unavailable in plain widget tests without
+      // a SharedPreferences mock).
+    }
+  }
+
+  /// Sweeps the local `/24` LAN for printers listening on [port] and populates
+  /// [discovered]. When a single printer responds (or [host] is still empty),
+  /// its address is filled into [host] and [port] automatically.
+  Future<void> scanNetwork() async {
+    if (_busy) return;
+    _busy = true;
+    _scanning = true;
+    notifyListeners();
+    try {
+      final List<PrintlyDevice> found = await _discoverPrinters(port: _port);
+      _discovered
+        ..clear()
+        ..addAll(found);
+      if (found.isEmpty) {
+        _log.success('network scan → no printers found on port $_port');
+      } else {
+        final String addresses = found
+            .map((PrintlyDevice d) => d.address)
+            .join(', ');
+        _log.success('network scan → ${found.length} found ($addresses)');
+        if (found.length == 1 || _host.isEmpty) {
+          useRecent(found.first.address);
+        }
+      }
+    } catch (error) {
+      _log.failure('network scan error → $error');
+    } finally {
+      _scanning = false;
+      _busy = false;
+      notifyListeners();
+    }
+  }
+
+  /// Fills [host] and [port] from a `host:port` string in [recents] or
+  /// [discovered].
   void useRecent(String hostPort) {
     final int sep = hostPort.lastIndexOf(':');
     if (sep <= 0) return;
@@ -182,21 +284,75 @@ class NetworkViewModel extends ChangeNotifier {
   }
 
   /// Opens a TCP connection to the current device.
+  ///
+  /// If connecting to [device] fails (for example, the printer was moved to
+  /// another Ethernet port or the router assigned a new DHCP lease after a
+  /// reboot), automatically sweeps the local LAN on [port]. When a single
+  /// replacement printer is found at a new IP, updates [host]/[port] and
+  /// connects to it transparently.
   Future<void> connect() async {
     final PrintlyDevice? d = device;
     if (d == null || _busy) return;
     _busy = true;
     notifyListeners();
     try {
-      await Printly.instance.connect(d);
+      await _connectDevice(d);
       resetTicketAlignment();
       _log.success('network connect → ${d.address}');
       _remember(d.address);
     } catch (error) {
-      _log.failure('network connect error → $error');
+      final bool recovered = await _tryAutoRecoverFromStaleAddress(
+        failedDevice: d,
+        originalError: error,
+      );
+      if (!recovered) {
+        _log.failure('network connect error → $error');
+      }
     } finally {
       _busy = false;
       notifyListeners();
+    }
+  }
+
+  Future<bool> _tryAutoRecoverFromStaleAddress({
+    required PrintlyDevice failedDevice,
+    required Object originalError,
+  }) async {
+    _scanning = true;
+    notifyListeners();
+    try {
+      final List<PrintlyDevice> found = await _discoverPrinters(port: _port);
+      _discovered
+        ..clear()
+        ..addAll(found);
+      final List<PrintlyDevice> candidates = found
+          .where((PrintlyDevice p) => p.address != failedDevice.address)
+          .toList(growable: false);
+      if (candidates.length == 1) {
+        final PrintlyDevice replacement = candidates.single;
+        useRecent(replacement.address);
+        await _connectDevice(replacement);
+        resetTicketAlignment();
+        _recents.remove(failedDevice.address);
+        _remember(replacement.address);
+        _log.success(
+          'network auto-recovered → ${replacement.address} '
+          '(was ${failedDevice.address})',
+        );
+        return true;
+      }
+      if (candidates.length > 1) {
+        _log.failure(
+          'network connect to ${failedDevice.address} failed ($originalError); '
+          'found ${candidates.length} printers on LAN — pick one from Discovered',
+        );
+        return true;
+      }
+      return false;
+    } on Object {
+      return false;
+    } finally {
+      _scanning = false;
     }
   }
 
@@ -207,7 +363,7 @@ class NetworkViewModel extends ChangeNotifier {
     _busy = true;
     notifyListeners();
     try {
-      await Printly.instance.disconnect(device: d);
+      await _disconnectDevice(d);
       _log.success('network disconnect → ${d.address}');
     } catch (error) {
       _log.failure('network disconnect error → $error');

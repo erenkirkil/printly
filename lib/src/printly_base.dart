@@ -16,6 +16,7 @@ import 'core/connection_type.dart';
 import 'core/printly_device.dart';
 import 'core/printly_exception.dart';
 import 'core/printly_permission_status.dart';
+import 'network/network_discovery.dart';
 import 'platform/network_routing_platform.dart';
 import 'platform/printly_platform_interface.dart';
 import 'print/print_config.dart';
@@ -421,6 +422,38 @@ class Printly {
     controller: _scan,
     registry: _scanSessionRegistry,
     resolveDefaultTimeout: () => defaultScanTimeout,
+  );
+
+  /// Sweeps the local IPv4 `/24` network (or an explicit [subnet] / [hosts]
+  /// list) for thermal printers listening on TCP [port] (default `9100`) and
+  /// returns a [PrintlyDevice.network] for each responsive host.
+  ///
+  /// Use this when a DHCP-configured Ethernet/Wi-Fi printer is moved to a
+  /// different wall port or obtains a new lease after a router reboot, or to
+  /// let the user pick a LAN printer without typing its IP by hand.
+  ///
+  /// Each host is checked with a **zero-write TCP handshake** (the socket is
+  /// closed via `Socket.destroy()` immediately on connect without sending any
+  /// bytes), so non-ESC/POS printers on port 9100 never print garbage and
+  /// single-socket thermal printers are never left wedged. Any network printer
+  /// already connected through this [Printly] instance is preserved in the
+  /// returned list without opening a second socket.
+  ///
+  /// Typical sweep time for a 254-host `/24` subnet with the default
+  /// [probeTimeout] (`200 ms`) and [concurrency] (`48`) is ~1.2 seconds.
+  Future<List<PrintlyDevice>> discoverNetworkPrinters({
+    String? subnet,
+    Iterable<String>? hosts,
+    int port = kDefaultNetworkPort,
+    Duration probeTimeout = kDefaultNetworkProbeTimeout,
+    int concurrency = kDefaultNetworkDiscoveryConcurrency,
+  }) => NetworkPrinterDiscovery.discover(
+    subnet: subnet,
+    hosts: hosts,
+    port: port,
+    probeTimeout: probeTimeout,
+    concurrency: concurrency,
+    activeAddresses: _platform.openNetworkAddresses,
   );
 
   /// Opens a link to [device]. Idempotent for duplicate taps and serialises
