@@ -14,11 +14,7 @@ import 'settings_view_model.dart';
 /// widget's `State` and this class can be exercised without any widget
 /// machinery.
 class PrintViewModel extends ChangeNotifier {
-  PrintViewModel({
-    required ActionLogViewModel log,
-    required SettingsViewModel settings,
-  }) : _log = log,
-       _settings = settings;
+  PrintViewModel({required this._log, required this._settings});
 
   final ActionLogViewModel _log;
   final SettingsViewModel _settings;

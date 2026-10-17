@@ -9,7 +9,7 @@ let package = Package(
         // Keep in sync with printly.podspec (`s.platform`) — the two
         // manifests describe the same sources for the SPM and CocoaPods
         // consumers respectively.
-        .iOS("13.0")
+        .iOS("15.0")
     ],
     products: [
         .library(name: "printly", targets: ["printly"])

@@ -2,14 +2,14 @@ group = "com.erenkirkil.printly"
 version = "1.0-SNAPSHOT"
 
 buildscript {
-    ext.kotlin_version = "2.1.0"
+    ext.kotlin_version = "2.4.0"
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath("com.android.tools.build:gradle:8.13.2")
+        classpath("com.android.tools.build:gradle:9.1.0")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
     }
 }
@@ -22,7 +22,6 @@ allprojects {
 }
 
 apply plugin: "com.android.library"
-apply plugin: "kotlin-android"
 
 android {
     namespace = "com.erenkirkil.printly"
@@ -32,10 +31,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17
     }
 
     sourceSets {
@@ -60,7 +55,19 @@ android {
     }
 }
 
+// Built-in Kotlin: AGP 9 compiles Kotlin itself, so the plugin no longer
+// applies `kotlin-android`. Applying it would block apps from turning on
+// `android.builtInKotlin` and will fail outright in a future Flutter. The KGP
+// classpath above stays only so this block's `JvmTarget` type resolves.
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
 dependencies {
-    testImplementation("org.jetbrains.kotlin:kotlin-test")
+    // Built-in Kotlin does not infer the kotlin-test framework variant the way
+    // KGP did, so the JUnit 5 flavour (matching useJUnitPlatform) is explicit.
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
     testImplementation("org.mockito:mockito-core:5.0.0")
 }

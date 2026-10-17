@@ -18,6 +18,10 @@
   than through printly; the printly-driven round on that printer is still
   queued.
 
+## 0.4.0 — 2026-10-11
+
+### Added
+
 - `isLocationRequired()` reports whether Bluetooth scanning on this device
   needs the location *permission* — `true` on Android below API 31, `false`
   from API 31 up and on iOS. The native side already knew this (it is the
@@ -50,17 +54,35 @@
 
 ### Changed
 
+- **Minimum Flutter is now 3.44.0 (Dart 3.12.0); was 3.35.3.** The Android
+  module migrated to built-in Kotlin: it no longer applies the Kotlin Gradle
+  Plugin (`kotlin-android`) and leaves compiling Kotlin to the Android Gradle
+  Plugin. Flutter 3.47 warns about every plugin that still applies KGP —
+  printly was on that list — and a future Flutter will fail the build
+  outright; a plugin that applies KGP also blocks its host app from turning
+  on `android.builtInKotlin=true`. Flutter 3.44 is the first release that
+  builds such a plugin, so the floor moves with it; projects on an older
+  Flutter keep resolving 0.3.0. No change is needed in the host app: the
+  plugin was built and verified in an app on AGP 9 with
+  `android.builtInKotlin=true`, an AGP 9 app that still applies KGP itself
+  with `builtInKotlin=false`, and an AGP 8 app.
+
+- **Minimum iOS is now 15.0; was 13.0** (`printly.podspec` and
+  `Package.swift`). Current Xcode no longer accepts a deployment target
+  below 15.0, so an app built with it already targets 15.0 or higher and
+  nothing changes in practice; an app still targeting iOS 13 or 14 must
+  raise its own deployment target to resolve this version.
+
 - The Android module now compiles against Java 17 and Kotlin `jvmTarget`
-  17 (was 11), and the Android Gradle Plugin moved to 8.13.2. Building the
-  plugin therefore needs a JDK 17 or newer toolchain. In practice most
-  projects are already there — Flutter 3.35, this package's declared
-  minimum, requires JDK 17 for Android builds regardless of printly — but
-  a project pinned to an older JDK will see a Gradle toolchain error
-  rather than anything printly-specific, so it is called out here.
-  `compileSdk` (36) and `minSdk` (24) are unchanged. The example app also
-  drops the `android.enableJetifier` flag: nothing in the dependency graph
-  pulls a pre-AndroidX support-library artifact any more, so the rewrite
-  step was doing nothing but slowing builds down.
+  17 (was 11). Building the plugin therefore needs a JDK 17 or newer
+  toolchain. Every Flutter release this package supports already requires
+  JDK 17 for Android builds, so in practice nothing changes, but a project
+  pinned to an older JDK will see a Gradle toolchain error rather than
+  anything printly-specific, so it is called out here. `compileSdk` (36) and
+  `minSdk` (24) are unchanged. The example app moved to AGP 9.1 / Gradle 9.3
+  and drops the `android.enableJetifier` flag: nothing in the dependency
+  graph pulls a pre-AndroidX support-library artifact any more, so the
+  rewrite step was doing nothing but slowing builds down.
 
 ### Fixed
 

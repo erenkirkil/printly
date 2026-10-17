@@ -65,12 +65,10 @@ import 'scan_controller.dart';
 /// rather than through a session.
 class PrintlyScanSession {
   PrintlyScanSession._({
-    required ScanController controller,
-    required ScanSessionRegistry registry,
-    required Duration Function() resolveDefaultTimeout,
-  }) : _controller = controller,
-       _registry = registry,
-       _resolveDefaultTimeout = resolveDefaultTimeout;
+    required this._controller,
+    required this._registry,
+    required this._resolveDefaultTimeout,
+  });
 
   final ScanController _controller;
   final ScanSessionRegistry _registry;

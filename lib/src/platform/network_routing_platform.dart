@@ -18,14 +18,11 @@ import 'printly_platform_interface.dart';
 /// installed as `PrintlyPlatform.instance`, so the platform-interface token
 /// guard and a consumer's own fake are unaffected.
 class NetworkRoutingPlatform extends PrintlyPlatform {
-  /// Wraps [inner] (usually `PrintlyPlatform.instance`), optionally with a
+  /// Wraps [_inner] (usually `PrintlyPlatform.instance`), optionally with a
   /// supplied [tcp] transport (tests inject one; production creates the
   /// default).
-  NetworkRoutingPlatform({
-    required PrintlyPlatform inner,
-    TcpPrinterTransport? tcp,
-  }) : _inner = inner,
-       _tcp = tcp ?? TcpPrinterTransport() {
+  NetworkRoutingPlatform({required this._inner, TcpPrinterTransport? tcp})
+    : _tcp = tcp ?? TcpPrinterTransport() {
     // Sources are subscribed lazily, on the first listener, and dropped again
     // with the last one. Subscribing in the constructor would make merely
     // constructing the decorator listen to the native connection-event

@@ -16,11 +16,7 @@ import 'settings_view_model.dart';
 class NetworkViewModel extends ChangeNotifier {
   /// Creates the view model. Call [start] once mounted to begin observing
   /// connection state; the constructor stays side-effect free.
-  NetworkViewModel({
-    required ActionLogViewModel log,
-    required SettingsViewModel settings,
-  }) : _log = log,
-       _settings = settings;
+  NetworkViewModel({required this._log, required this._settings});
 
   /// Default raw-printing port for ESC/POS network printers.
   static const int kDefaultPort = 9100;
