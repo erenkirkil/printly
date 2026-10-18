@@ -1,7 +1,7 @@
 import 'dart:convert' show latin1;
 import 'dart:typed_data';
 
-import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
+import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart' show Generator;
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/widgets.dart' show GlobalKey;
 
@@ -9,6 +9,7 @@ import '../raster/printly_bitmap.dart';
 import '../raster/printly_dithering.dart';
 import '../raster/printly_raster.dart';
 import '../raster/raster_encoder.dart';
+import 'escpos_encoder.dart';
 import 'print_config.dart';
 import 'printly_barcode_type.dart';
 import 'printly_charset.dart';
@@ -43,50 +44,32 @@ import 'turkish_code_page.dart';
 /// await Printly.instance.print(device, job);
 /// ```
 ///
-/// printly reuses the `esc_pos_utils_plus` [Generator] for command framing but
-/// encodes Turkish text itself (via [TurkishCodePage]) because the library only
-/// encodes through `latin1`, which cannot represent the Turkish letters.
+/// printly frames ESC/POS commands through its pure-Dart [EscPosEncoder] and
+/// encodes Turkish text via [TurkishCodePage].
 class PrintJob {
-  PrintJob._(this._generator, this._config) {
+  PrintJob._(this._encoder, this._config) {
     // Start every job with ESC @ so the printer is in a known state.
-    _bytes.addAll(_generator.reset());
+    _bytes.addAll(_encoder.reset());
   }
 
-  /// Test-only seam that builds a job around a pre-constructed [generator],
-  /// avoiding the asynchronous capability-profile load. Production code should
-  /// use [create] / `Printly.instance.newJob(...)`.
+  /// Test-only seam retained for source compatibility until Phase 3 removes
+  /// `esc_pos_utils_plus` and makes [create] synchronous. The [generator]
+  /// argument is ignored — emission now runs through [EscPosEncoder].
   @visibleForTesting
   factory PrintJob.fromGenerator({
     required Generator generator,
     PrintConfig config = const PrintConfig(),
-  }) => PrintJob._(generator, config);
+  }) => PrintJob._(EscPosEncoder(), config);
 
-  /// Creates a job for the given paper width, loading (and caching) the ESC/POS
-  /// capability profile on first use. When [config] is supplied its
+  /// Creates a job for the given paper width. When [config] is supplied its
   /// [PrintConfig.paperWidth] takes precedence over the [paperWidth] argument.
   static Future<PrintJob> create({
     PrintlyPaperWidth paperWidth = PrintlyPaperWidth.mm58,
     PrintConfig? config,
   }) async {
     final PrintConfig cfg = config ?? PrintConfig(paperWidth: paperWidth);
-    final Future<CapabilityProfile> future = _profileFuture ??=
-        CapabilityProfile.load();
-    final CapabilityProfile profile;
-    try {
-      profile = await future;
-    } catch (_) {
-      // Evict the failed future so a later call retries the asset load
-      // instead of rethrowing the same stale error forever (e.g. after a
-      // too-early first call before the binding was initialised).
-      if (identical(_profileFuture, future)) {
-        _profileFuture = null;
-      }
-      rethrow;
-    }
-    return PrintJob._(Generator(_toPaperSize(cfg.paperWidth), profile), cfg);
+    return PrintJob._(EscPosEncoder(), cfg);
   }
-
-  static Future<CapabilityProfile>? _profileFuture;
 
   // The ESC d (feed n lines) operand is a single byte, and feeding 0 lines is
   // a no-op, so feed counts are clamped into this range everywhere.
@@ -126,7 +109,7 @@ class PrintJob {
     0x2D, 0x2E, 0x24, 0x2F, 0x2B, 0x25, 0x20, // - . $ / + % space
   };
 
-  final Generator _generator;
+  final EscPosEncoder _encoder;
   final PrintConfig _config;
   final List<int> _bytes = <int>[];
   bool _cutEmitted = false;
@@ -156,14 +139,9 @@ class PrintJob {
       _bytes.addAll(<int>[0x1B, 0x74, escT]);
     }
     final Uint8List encoded = TurkishCodePage.encode(content, charset: cs);
-    final PosStyles styles = PosStyles(
-      align: _toPosAlign(align),
-      bold: style.isBold,
-      underline: style.isUnderline,
-      height: _toPosTextSize(size.heightMultiplier),
-      width: _toPosTextSize(size.widthMultiplier),
+    _bytes.addAll(
+      _encoder.text(encoded, align: align, style: style, size: size),
     );
-    _bytes.addAll(_generator.textEncoded(encoded, styles: styles));
     return this;
   }
 
@@ -178,7 +156,7 @@ class PrintJob {
   /// Calling this suppresses the automatic [PrintConfig.cutAfterPrint] cut in
   /// [build], so a job never cuts twice.
   PrintJob cut({PrintlyCutMode? mode}) {
-    _bytes.addAll(_generator.cut(mode: _toPosCutMode(mode ?? _config.cutMode)));
+    _bytes.addAll(_encoder.cut(mode: mode ?? _config.cutMode));
     _cutEmitted = true;
     return this;
   }
@@ -246,20 +224,23 @@ class PrintJob {
       unmappable,
       replacement,
     );
-    final Barcode bc = _buildBarcode(type, sanitized);
-    final BarcodeText hri = showText
-        ? _toBarcodeText(textPosition)
-        : BarcodeText.none;
+    final String wirePayload = type == PrintlyBarcodeType.code128
+        ? _code128Payload(sanitized)
+        : sanitized;
+    final PrintlyHriPosition hri = showText
+        ? textPosition
+        : PrintlyHriPosition.none;
     _bytes.addAll(
-      _generator.barcode(
-        bc,
+      _encoder.barcode(
+        wirePayload,
+        type: type,
         height: height.clamp(_minBarcodeHeight, _maxBarcodeHeight),
         width: (width ?? _defaultBarcodeWidth).clamp(
           _minBarcodeWidth,
           _maxBarcodeWidth,
         ),
-        textPos: hri,
-        align: _toPosAlign(align),
+        hriPosition: hri,
+        align: align,
       ),
     );
     return this;
@@ -329,10 +310,10 @@ class PrintJob {
 
   /// Emits the QR function sequence (GS ( k 167/169/180/181) directly.
   ///
-  /// The wrapped library's store command hardcodes `pH = 0`, so any payload
-  /// over 252 bytes overflows `pL` and prints garbage; this emits the same
+  /// The legacy library's store command hardcoded `pH = 0`, so any payload
+  /// over 252 bytes overflowed `pL` and printed garbage; this emits the same
   /// function set with correct two-byte length math. Alignment goes through
-  /// [Generator.setStyles] so the generator's style cache stays coherent for
+  /// [EscPosEncoder.setStyles] so the encoder's style cache stays coherent for
   /// subsequent [text] calls.
   List<int> _emitQr(
     Uint8List payload,
@@ -342,13 +323,11 @@ class PrintJob {
   ) {
     final int storeLen = payload.length + 3;
     return <int>[
-      ..._generator.setStyles(
-        const PosStyles().copyWith(align: _toPosAlign(align)),
-      ),
+      ..._encoder.setStyles(align: align),
       // Function 167: module size.
       ..._qrHeader, 0x03, 0x00, 0x31, 0x43, moduleSize,
       // Function 169: error correction level.
-      ..._qrHeader, 0x03, 0x00, 0x31, 0x45, _toQrCorrection(errorLevel).value,
+      ..._qrHeader, 0x03, 0x00, 0x31, 0x45, _qrErrorLevelByte(errorLevel),
       // Function 180: store data (pL/pH little-endian, len = data + 3).
       ..._qrHeader, storeLen & 0xFF, (storeLen >> 8) & 0xFF, 0x31, 0x50, 0x30,
       ...payload,
@@ -373,7 +352,7 @@ class PrintJob {
   ///
   /// [align] positions the block on the paper, which only shows when the bitmap
   /// is narrower than the paper — full-width images look the same at every
-  /// setting. It is applied through the generator's style cache rather than as
+  /// setting. It is applied through the encoder's style cache rather than as
   /// raw bytes; writing `ESC a` directly would leave that cache believing the
   /// alignment never changed, and the next [text] call would then skip emitting
   /// its own and print misaligned.
@@ -385,11 +364,7 @@ class PrintJob {
   }) {
     if (bitmap.isEmpty) return this;
     _bytes
-      ..addAll(
-        _generator.setStyles(
-          const PosStyles().copyWith(align: _toPosAlign(align)),
-        ),
-      )
+      ..addAll(_encoder.setStyles(align: align))
       ..addAll(
         RasterEncoder.emit(bitmap, bandHeight: _config.rasterBandHeight),
       );
@@ -503,31 +478,13 @@ class PrintJob {
       out.addAll(_emitFeed(_config.feedLines));
     }
     if (_config.cutAfterPrint && !_cutEmitted) {
-      out.addAll(_generator.cut(mode: _toPosCutMode(_config.cutMode)));
+      out.addAll(_encoder.cut(mode: _config.cutMode));
     }
     return Uint8List.fromList(out);
   }
 
   List<int> _emitFeed(int lines) =>
-      _generator.feed(lines.clamp(_minFeedLines, _maxFeedLines));
-
-  Barcode _buildBarcode(PrintlyBarcodeType type, String data) {
-    try {
-      return switch (type) {
-        PrintlyBarcodeType.ean13 => Barcode.ean13(data.split('')),
-        PrintlyBarcodeType.ean8 => Barcode.ean8(data.split('')),
-        PrintlyBarcodeType.upcA => Barcode.upcA(data.split('')),
-        PrintlyBarcodeType.code39 => Barcode.code39(data.split('')),
-        PrintlyBarcodeType.itf => Barcode.itf(data.split('')),
-        PrintlyBarcodeType.codabar => Barcode.codabar(data.split('')),
-        PrintlyBarcodeType.code128 => Barcode.code128(
-          _code128Payload(data).split(''),
-        ),
-      };
-    } on Exception catch (error) {
-      throw ArgumentError('Invalid ${type.name} barcode payload: $error');
-    }
-  }
+      _encoder.feed(lines.clamp(_minFeedLines, _maxFeedLines));
 
   /// Applies the [PrintlyUnmappable] policy for the symbologies where a
   /// substitution cannot corrupt the payload semantics (CODE128, CODE39).
@@ -544,11 +501,8 @@ class PrintJob {
     };
 
     if (unmappable == PrintlyUnmappable.throwError) {
-      // The wrapped library validates CODE39 and the numeric symbologies
-      // itself, but Barcode.code128 only checks length — a non-encodable
-      // rune would silently print a corrupt symbol. Enforce the documented
-      // ArgumentError contract here, against the same charset the
-      // sanitizer targets.
+      // EscPosEncoder validates CODE39 and the numeric symbologies, while
+      // CODE128 requires printable ASCII on the auto-{B path.
       //
       // A caller-supplied {A/{B/{C selector takes manual control of the
       // code set (code set A legitimately encodes 0x00-0x1F), so the
@@ -611,38 +565,10 @@ class PrintJob {
     return '{B${data.replaceAll('{', '{{')}';
   }
 
-  static PaperSize _toPaperSize(PrintlyPaperWidth width) => switch (width) {
-    PrintlyPaperWidth.mm58 => PaperSize.mm58,
-    PrintlyPaperWidth.mm80 => PaperSize.mm80,
+  static int _qrErrorLevelByte(PrintlyQrErrorLevel level) => switch (level) {
+    PrintlyQrErrorLevel.low => 48,
+    PrintlyQrErrorLevel.medium => 49,
+    PrintlyQrErrorLevel.quartile => 50,
+    PrintlyQrErrorLevel.high => 51,
   };
-
-  static PosAlign _toPosAlign(PrintlyTextAlign align) => switch (align) {
-    PrintlyTextAlign.left => PosAlign.left,
-    PrintlyTextAlign.center => PosAlign.center,
-    PrintlyTextAlign.right => PosAlign.right,
-  };
-
-  static PosTextSize _toPosTextSize(int multiplier) =>
-      multiplier >= 2 ? PosTextSize.size2 : PosTextSize.size1;
-
-  static PosCutMode _toPosCutMode(PrintlyCutMode mode) => switch (mode) {
-    PrintlyCutMode.full => PosCutMode.full,
-    PrintlyCutMode.partial => PosCutMode.partial,
-  };
-
-  static BarcodeText _toBarcodeText(PrintlyHriPosition position) =>
-      switch (position) {
-        PrintlyHriPosition.none => BarcodeText.none,
-        PrintlyHriPosition.above => BarcodeText.above,
-        PrintlyHriPosition.below => BarcodeText.below,
-        PrintlyHriPosition.both => BarcodeText.both,
-      };
-
-  static QRCorrection _toQrCorrection(PrintlyQrErrorLevel level) =>
-      switch (level) {
-        PrintlyQrErrorLevel.low => QRCorrection.L,
-        PrintlyQrErrorLevel.medium => QRCorrection.M,
-        PrintlyQrErrorLevel.quartile => QRCorrection.Q,
-        PrintlyQrErrorLevel.high => QRCorrection.H,
-      };
 }
