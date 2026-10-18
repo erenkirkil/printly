@@ -21,11 +21,59 @@ void main() {
       expect(encoder.feed(255), const <int>[0x1B, 0x64, 0xFF]);
     });
 
-    test('feed rejects out-of-range counts in debug mode', () {
+    test('feed rejects out-of-range counts with RangeError', () {
       final EscPosEncoder encoder = EscPosEncoder();
-      expect(() => encoder.feed(0), throwsAssertionError);
-      expect(() => encoder.feed(-1), throwsAssertionError);
-      expect(() => encoder.feed(256), throwsAssertionError);
+      expect(() => encoder.feed(0), throwsRangeError);
+      expect(() => encoder.feed(-1), throwsRangeError);
+      expect(() => encoder.feed(256), throwsRangeError);
+    });
+
+    test('barcode rejects out-of-range height and width with RangeError', () {
+      final EscPosEncoder encoder = EscPosEncoder();
+      expect(
+        () => encoder.barcode(
+          '{BAB',
+          type: PrintlyBarcodeType.code128,
+          height: 0,
+          width: 3,
+          hriPosition: PrintlyHriPosition.below,
+          align: PrintlyTextAlign.center,
+        ),
+        throwsRangeError,
+      );
+      expect(
+        () => encoder.barcode(
+          '{BAB',
+          type: PrintlyBarcodeType.code128,
+          height: 256,
+          width: 3,
+          hriPosition: PrintlyHriPosition.below,
+          align: PrintlyTextAlign.center,
+        ),
+        throwsRangeError,
+      );
+      expect(
+        () => encoder.barcode(
+          '{BAB',
+          type: PrintlyBarcodeType.code128,
+          height: 60,
+          width: 1,
+          hriPosition: PrintlyHriPosition.below,
+          align: PrintlyTextAlign.center,
+        ),
+        throwsRangeError,
+      );
+      expect(
+        () => encoder.barcode(
+          '{BAB',
+          type: PrintlyBarcodeType.code128,
+          height: 60,
+          width: 7,
+          hriPosition: PrintlyHriPosition.below,
+          align: PrintlyTextAlign.center,
+        ),
+        throwsRangeError,
+      );
     });
 
     test('cut emits 5 LFs + GS V 0 (full) or GS V 1 (partial)', () {
@@ -61,6 +109,63 @@ void main() {
         0x41, 0x42, // "AB"
         0x0A, // LF
       ]);
+    });
+
+    test('qr emits setStyles followed by GS ( k functions 167/169/180/181', () {
+      final EscPosEncoder encoder = EscPosEncoder();
+      final List<int> out = encoder.qr(
+        Uint8List.fromList(<int>[0x4F, 0x4B]), // "OK"
+        moduleSize: 6,
+        errorLevel: PrintlyQrErrorLevel.high,
+        align: PrintlyTextAlign.center,
+      );
+      expect(out, const <int>[
+        0x1B, 0x61, 0x31, 0x1C, 0x2E, // center + FS .
+        0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x06, // fn 167: size 6
+        0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x33, // fn 169: H (51)
+        0x1D, 0x28, 0x6B, 0x05, 0x00, 0x31, 0x50, 0x30, 0x4F, 0x4B, // fn 180
+        0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30, // fn 181: print
+      ]);
+    });
+
+    test('qr rejects out-of-range moduleSize or payload length', () {
+      final EscPosEncoder encoder = EscPosEncoder();
+      expect(
+        () => encoder.qr(
+          Uint8List.fromList(<int>[0x41]),
+          moduleSize: 0,
+          errorLevel: PrintlyQrErrorLevel.medium,
+          align: PrintlyTextAlign.center,
+        ),
+        throwsRangeError,
+      );
+      expect(
+        () => encoder.qr(
+          Uint8List.fromList(<int>[0x41]),
+          moduleSize: 17,
+          errorLevel: PrintlyQrErrorLevel.medium,
+          align: PrintlyTextAlign.center,
+        ),
+        throwsRangeError,
+      );
+      expect(
+        () => encoder.qr(
+          Uint8List(0),
+          moduleSize: 4,
+          errorLevel: PrintlyQrErrorLevel.medium,
+          align: PrintlyTextAlign.center,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => encoder.qr(
+          Uint8List(2954),
+          moduleSize: 4,
+          errorLevel: PrintlyQrErrorLevel.medium,
+          align: PrintlyTextAlign.center,
+        ),
+        throwsArgumentError,
+      );
     });
   });
 
@@ -251,17 +356,64 @@ void main() {
       );
     });
 
-    test('validates CODE128 length 2..255 and ASCII bytes', () {
-      expect(() => emit(PrintlyBarcodeType.code128, '{BA'), returnsNormally);
-      expect(() => emit(PrintlyBarcodeType.code128, 'A'), throwsArgumentError);
+    test('rejects CODABAR payloads missing a start character (A-D / a-d)', () {
       expect(
-        () => emit(PrintlyBarcodeType.code128, 'A' * 256),
+        () => emit(PrintlyBarcodeType.codabar, '123456'),
         throwsArgumentError,
       );
       expect(
-        () => emit(PrintlyBarcodeType.code128, '{B\u0080'),
+        () => emit(PrintlyBarcodeType.codabar, '12345B'),
         throwsArgumentError,
       );
+      expect(
+        () => emit(PrintlyBarcodeType.codabar, '-1234A'),
+        throwsArgumentError,
+      );
+    });
+
+    test('rejects CODABAR payloads with start/stop letters inside body', () {
+      expect(
+        () => emit(PrintlyBarcodeType.codabar, 'A12B34C'),
+        throwsArgumentError,
+      );
+      expect(
+        () => emit(PrintlyBarcodeType.codabar, 'a12d34b'),
+        throwsArgumentError,
+      );
+      expect(() => emit(PrintlyBarcodeType.codabar, 'AB'), throwsArgumentError);
+    });
+
+    test(
+      'validates CODE128 length 3..255, selector prefix and ASCII bytes',
+      () {
+        expect(() => emit(PrintlyBarcodeType.code128, '{BA'), returnsNormally);
+        expect(
+          () => emit(PrintlyBarcodeType.code128, 'A'),
+          throwsArgumentError,
+        );
+        expect(
+          () => emit(PrintlyBarcodeType.code128, 'A' * 256),
+          throwsArgumentError,
+        );
+        expect(
+          () => emit(PrintlyBarcodeType.code128, '{B\u0080'),
+          throwsArgumentError,
+        );
+      },
+    );
+
+    test('rejects CODE128 without {A/{B/{C prefix or with empty body', () {
+      expect(
+        () => emit(PrintlyBarcodeType.code128, 'AB12'),
+        throwsArgumentError,
+      );
+      expect(
+        () => emit(PrintlyBarcodeType.code128, '{D12'),
+        throwsArgumentError,
+      );
+      expect(() => emit(PrintlyBarcodeType.code128, '{B'), throwsArgumentError);
+      expect(() => emit(PrintlyBarcodeType.code128, '{A'), throwsArgumentError);
+      expect(() => emit(PrintlyBarcodeType.code128, '{C'), throwsArgumentError);
     });
   });
 
@@ -303,49 +455,12 @@ void main() {
           paperDots: paperWidth.dots,
           maxModuleSize: maxModuleSize,
         );
-        final int storeLen = payload.length + 3;
-        final int levelByte = switch (errorLevel) {
-          PrintlyQrErrorLevel.low => 48,
-          PrintlyQrErrorLevel.medium => 49,
-          PrintlyQrErrorLevel.quartile => 50,
-          PrintlyQrErrorLevel.high => 51,
-        };
-        return <int>[
-          ...encoder.setStyles(align: align),
-          0x1D,
-          0x28,
-          0x6B,
-          0x03,
-          0x00,
-          0x31,
-          0x43,
-          moduleSize,
-          0x1D,
-          0x28,
-          0x6B,
-          0x03,
-          0x00,
-          0x31,
-          0x45,
-          levelByte,
-          0x1D,
-          0x28,
-          0x6B,
-          storeLen & 0xFF,
-          (storeLen >> 8) & 0xFF,
-          0x31,
-          0x50,
-          0x30,
-          ...payload,
-          0x1D,
-          0x28,
-          0x6B,
-          0x03,
-          0x00,
-          0x31,
-          0x51,
-          0x30,
-        ];
+        return encoder.qr(
+          payload,
+          moduleSize: moduleSize,
+          errorLevel: errorLevel,
+          align: align,
+        );
       }
 
       test('1. representative receipt shadow matches frozen golden', () {

@@ -44,7 +44,7 @@ import 'turkish_code_page.dart';
 /// await Printly.instance.print(device, job);
 /// ```
 ///
-/// printly frames ESC/POS commands through its pure-Dart [EscPosEncoder] and
+/// printly frames ESC/POS commands through its pure-Dart `EscPosEncoder` and
 /// encodes Turkish text via [TurkishCodePage].
 class PrintJob {
   PrintJob._(this._encoder, this._config) {
@@ -54,7 +54,7 @@ class PrintJob {
 
   /// Test-only seam retained for source compatibility until Phase 3 removes
   /// `esc_pos_utils_plus` and makes [create] synchronous. The [generator]
-  /// argument is ignored — emission now runs through [EscPosEncoder].
+  /// argument is ignored — emission now runs through `EscPosEncoder`.
   @visibleForTesting
   factory PrintJob.fromGenerator({
     required Generator generator,
@@ -87,12 +87,9 @@ class PrintJob {
   static const int _maxBarcodeWidth = 6;
   static const int _defaultBarcodeWidth = 3;
 
-  // GS ( k — the QR command header shared by all QR functions.
-  static const List<int> _qrHeader = <int>[0x1D, 0x28, 0x6B];
-
   // Absolute QR byte-mode capacity (version 40, error level L). Anything
   // larger cannot be encoded by any printer.
-  static const int _maxQrBytes = 2953;
+  static const int _maxQrBytes = EscPosEncoder.maxQrBytes;
 
   // Sanitization targets per symbology. CODE128 subset B covers printable
   // ASCII (0x20-0x7E; 0x7F DEL is in the code set but not printable — a
@@ -304,36 +301,15 @@ class PrintJob {
       paperDots: _config.paperWidth.dots,
       maxModuleSize: maxModuleSize,
     );
-    _bytes.addAll(_emitQr(payload, moduleSize, errorLevel, align));
+    _bytes.addAll(
+      _encoder.qr(
+        payload,
+        moduleSize: moduleSize,
+        errorLevel: errorLevel,
+        align: align,
+      ),
+    );
     return this;
-  }
-
-  /// Emits the QR function sequence (GS ( k 167/169/180/181) directly.
-  ///
-  /// The legacy library's store command hardcoded `pH = 0`, so any payload
-  /// over 252 bytes overflowed `pL` and printed garbage; this emits the same
-  /// function set with correct two-byte length math. Alignment goes through
-  /// [EscPosEncoder.setStyles] so the encoder's style cache stays coherent for
-  /// subsequent [text] calls.
-  List<int> _emitQr(
-    Uint8List payload,
-    int moduleSize,
-    PrintlyQrErrorLevel errorLevel,
-    PrintlyTextAlign align,
-  ) {
-    final int storeLen = payload.length + 3;
-    return <int>[
-      ..._encoder.setStyles(align: align),
-      // Function 167: module size.
-      ..._qrHeader, 0x03, 0x00, 0x31, 0x43, moduleSize,
-      // Function 169: error correction level.
-      ..._qrHeader, 0x03, 0x00, 0x31, 0x45, _qrErrorLevelByte(errorLevel),
-      // Function 180: store data (pL/pH little-endian, len = data + 3).
-      ..._qrHeader, storeLen & 0xFF, (storeLen >> 8) & 0xFF, 0x31, 0x50, 0x30,
-      ...payload,
-      // Function 181: print the stored symbol.
-      ..._qrHeader, 0x03, 0x00, 0x31, 0x51, 0x30,
-    ];
   }
 
   /// Appends an already-rendered [PrintlyBitmap] as a raster image.
@@ -494,6 +470,18 @@ class PrintJob {
     PrintlyUnmappable unmappable,
     int? replacement,
   ) {
+    final bool hasSelector =
+        type == PrintlyBarcodeType.code128 &&
+        data.length >= 2 &&
+        data[0] == '{' &&
+        (data[1] == 'A' || data[1] == 'B' || data[1] == 'C');
+    // A caller-supplied {A/{B/{C selector hands manual control of the code set
+    // to the caller (code set A legitimately encodes 0x00-0x1F), so the
+    // printable-ASCII gate and sanitizer only apply on the auto-{B path.
+    if (hasSelector) {
+      return data;
+    }
+
     final Set<int>? allowed = switch (type) {
       PrintlyBarcodeType.code128 => _code128Charset,
       PrintlyBarcodeType.code39 => _code39Charset,
@@ -503,16 +491,7 @@ class PrintJob {
     if (unmappable == PrintlyUnmappable.throwError) {
       // EscPosEncoder validates CODE39 and the numeric symbologies, while
       // CODE128 requires printable ASCII on the auto-{B path.
-      //
-      // A caller-supplied {A/{B/{C selector takes manual control of the
-      // code set (code set A legitimately encodes 0x00-0x1F), so the
-      // printable-ASCII contract below only guards the auto-{B path.
-      final bool hasSelector =
-          data.length >= 2 &&
-          data[0] == '{' &&
-          (data[1] == 'A' || data[1] == 'B' || data[1] == 'C');
       if (type == PrintlyBarcodeType.code128 &&
-          !hasSelector &&
           data.runes.any((int rune) => !_code128Charset.contains(rune))) {
         throw ArgumentError(
           'Invalid code128 barcode payload: contains characters outside '
@@ -564,11 +543,4 @@ class PrintJob {
     }
     return '{B${data.replaceAll('{', '{{')}';
   }
-
-  static int _qrErrorLevelByte(PrintlyQrErrorLevel level) => switch (level) {
-    PrintlyQrErrorLevel.low => 48,
-    PrintlyQrErrorLevel.medium => 49,
-    PrintlyQrErrorLevel.quartile => 50,
-    PrintlyQrErrorLevel.high => 51,
-  };
 }

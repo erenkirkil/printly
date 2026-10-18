@@ -155,7 +155,7 @@ void main() {
       },
     );
 
-    test('a second create() succeeds via the cached profile', () async {
+    test('repeated create() calls produce independent jobs', () async {
       final PrintJob first = await PrintJob.create();
       final PrintJob second = await PrintJob.create(
         paperWidth: PrintlyPaperWidth.mm80,
@@ -229,15 +229,21 @@ void main() {
       );
     });
 
-    test('honours a caller-supplied {C selector and escapes the rest', () {
+    test('honours a caller-supplied {B selector and escapes the rest', () {
       final List<int> bytes = job()
-          .barcode('{C12{3', type: PrintlyBarcodeType.code128)
+          .barcode('{B12{3', type: PrintlyBarcodeType.code128)
           .build();
-      // '{C' kept, '12' passed through, literal '{' doubled, '3' follows.
+      // '{B' kept, '12' passed through, literal '{' doubled, '3' follows.
       expect(
-        _contains(bytes, <int>[0x7B, 0x43, 0x31, 0x32, 0x7B, 0x7B, 0x33]),
+        _contains(bytes, <int>[0x7B, 0x42, 0x31, 0x32, 0x7B, 0x7B, 0x33]),
         isTrue,
       );
+    });
+
+    test('rejects a bare {A/{B/{C selector with no body', () {
+      expect(() => job().barcode('{A'), throwsArgumentError);
+      expect(() => job().barcode('{B'), throwsArgumentError);
+      expect(() => job().barcode('{C'), throwsArgumentError);
     });
 
     test('emits the default module width (GS w 3) on every barcode', () {
@@ -480,7 +486,23 @@ void main() {
       // Code set A encodes control characters; printly must keep a
       // caller-supplied selector payload as-is, as barcode() documents.
       final List<int> bytes = job().barcode('{AAB\x1D12').build();
-      expect(bytes, isNotEmpty);
+      expect(
+        _contains(bytes, <int>[0x7B, 0x41, 0x41, 0x42, 0x1D, 0x31, 0x32]),
+        isTrue,
+      );
     });
+
+    test(
+      'explicit {A selector keeps control characters under transliterate too',
+      () {
+        final List<int> bytes = job()
+            .barcode('{AAB\x1D12', unmappable: PrintlyUnmappable.transliterate)
+            .build();
+        expect(
+          _contains(bytes, <int>[0x7B, 0x41, 0x41, 0x42, 0x1D, 0x31, 0x32]),
+          isTrue,
+        );
+      },
+    );
   });
 }
