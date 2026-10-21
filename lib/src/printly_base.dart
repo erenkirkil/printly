@@ -444,7 +444,8 @@ class Printly {
   ///
   /// Throws [PrintlyScanException] with [PrintlyErrorCode.permissionDenied]
   /// when the OS refuses to open sockets (on Android: `INTERNET` is missing
-  /// from the app's manifest) instead of returning an empty list.
+  /// from the app's manifest; on iOS: Local Network access is denied)
+  /// instead of returning an empty list.
   Future<List<PrintlyDevice>> discoverNetworkPrinters({
     String? subnet,
     Iterable<String>? hosts,

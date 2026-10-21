@@ -30,8 +30,11 @@
   printers held by the same `Printly` instance are included without opening a
   second TCP connection, protecting single-socket embedded Ethernet stacks
   (`lwIP` / W5500). A sweep the OS refuses to run (`EACCES` / `EPERM`, e.g. a
-  missing Android `INTERNET` permission) throws `PrintlyScanException` with
-  `PrintlyErrorCode.permissionDenied` rather than reporting "no printers".
+  missing Android `INTERNET` permission, or nearly every probe failing with
+  `EHOSTUNREACH`, which is how iOS reports denied Local Network access) throws
+  `PrintlyScanException` with `PrintlyErrorCode.permissionDenied` rather than
+  reporting "no printers". Network connect failures now carry the OS error
+  message and errno.
 
 ## 0.4.0 — 2026-10-11
 

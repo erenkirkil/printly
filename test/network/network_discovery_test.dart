@@ -338,6 +338,160 @@ void main() {
       },
     );
 
+    // iOS reports a denied Local Network permission as EHOSTUNREACH (Darwin
+    // errno 65) on every dial, instantly — measured on an iPhone 16 against a
+    // live TK180. With the permission granted an empty LAN address times out
+    // instead, so a sweep in which *every* probe failed with 65 is the denial,
+    // not an empty network.
+    test('a sweep where every probe fails with EHOSTUNREACH fails with a '
+        'permissionDenied PrintlyScanException', () async {
+      await expectLater(
+        NetworkPrinterDiscovery.discover(
+          hosts: <String>['192.168.0.5', '192.168.0.6', '192.168.0.7'],
+          connector: (String host, int port, {Duration? timeout}) async {
+            throw const SocketException(
+              'Connection failed',
+              osError: OSError('No route to host', 65),
+            );
+          },
+        ),
+        throwsA(
+          isA<PrintlyScanException>()
+              .having(
+                (PrintlyScanException e) => e.code,
+                'code',
+                PrintlyErrorCode.permissionDenied,
+              )
+              .having(
+                (PrintlyScanException e) => e.message,
+                'message',
+                contains('errno = 65'),
+              ),
+        ),
+      );
+    });
+
+    // Measured on the iPhone with access denied: 252 of 253 probes failed
+    // with 65 and one still timed out. With access granted, back-to-back
+    // sweeps gave 0 × 65 (2 open, 251 timeouts), so "nearly all" is a safe
+    // line where "all" was not.
+    test('a stray timeout among EHOSTUNREACH probes is still read as the '
+        'denial', () async {
+      final Completer<Socket> never = Completer<Socket>();
+      final List<String> hosts = List<String>.generate(
+        20,
+        (int i) => '192.168.0.${i + 1}',
+      );
+      await expectLater(
+        NetworkPrinterDiscovery.discover(
+          hosts: hosts,
+          probeTimeout: const Duration(milliseconds: 20),
+          connector: (String host, int port, {Duration? timeout}) async {
+            if (host == '192.168.0.1') return never.future;
+            throw const SocketException(
+              'Connection failed',
+              osError: OSError('No route to host', 65),
+            );
+          },
+        ),
+        throwsA(
+          isA<PrintlyScanException>().having(
+            (PrintlyScanException e) => e.code,
+            'code',
+            PrintlyErrorCode.permissionDenied,
+          ),
+        ),
+      );
+    });
+
+    // Fence just under the line: 8 of 10 unreachable with nothing open is
+    // still "no printers", not a denial.
+    test(
+      '80 % EHOSTUNREACH with the rest timing out returns an empty list',
+      () async {
+        final Completer<Socket> never = Completer<Socket>();
+        final List<PrintlyDevice> devices =
+            await NetworkPrinterDiscovery.discover(
+              hosts: List<String>.generate(10, (int i) => '192.168.0.${i + 1}'),
+              probeTimeout: const Duration(milliseconds: 20),
+              connector: (String host, int port, {Duration? timeout}) async {
+                if (host == '192.168.0.1' || host == '192.168.0.2') {
+                  return never.future;
+                }
+                throw const SocketException(
+                  'Connection failed',
+                  osError: OSError('No route to host', 65),
+                );
+              },
+            );
+
+        expect(devices, isEmpty);
+      },
+    );
+
+    // Fence: a single unreachable host is ordinary LAN noise once anything
+    // else on the sweep behaves like a granted permission (here, a timeout).
+    test(
+      'EHOSTUNREACH mixed with a timed-out probe still returns a list',
+      () async {
+        final Completer<Socket> never = Completer<Socket>();
+        final List<PrintlyDevice> devices =
+            await NetworkPrinterDiscovery.discover(
+              hosts: <String>['192.168.0.5', '192.168.0.6'],
+              probeTimeout: const Duration(milliseconds: 20),
+              connector: (String host, int port, {Duration? timeout}) async {
+                if (host == '192.168.0.6') return never.future;
+                throw const SocketException(
+                  'Connection failed',
+                  osError: OSError('No route to host', 65),
+                );
+              },
+            );
+
+        expect(devices, isEmpty);
+      },
+    );
+
+    test(
+      'EHOSTUNREACH mixed with a reachable printer returns that printer',
+      () async {
+        final List<PrintlyDevice> devices =
+            await NetworkPrinterDiscovery.discover(
+              hosts: <String>['192.168.0.5', '192.168.0.6'],
+              connector: (String host, int port, {Duration? timeout}) async {
+                if (host == '192.168.0.6') return _DummySocket();
+                throw const SocketException(
+                  'Connection failed',
+                  osError: OSError('No route to host', 65),
+                );
+              },
+            );
+
+        expect(devices.map((PrintlyDevice d) => d.address).toList(), <String>[
+          '192.168.0.6:9100',
+        ]);
+      },
+    );
+
+    test('an already-connected printer is returned even when every probe '
+        'fails with EHOSTUNREACH', () async {
+      final List<PrintlyDevice> devices =
+          await NetworkPrinterDiscovery.discover(
+            hosts: <String>['192.168.0.5', '192.168.0.6'],
+            activeAddresses: const <String>{'192.168.0.5:9100'},
+            connector: (String host, int port, {Duration? timeout}) async {
+              throw const SocketException(
+                'Connection failed',
+                osError: OSError('No route to host', 65),
+              );
+            },
+          );
+
+      expect(devices.map((PrintlyDevice d) => d.address).toList(), <String>[
+        '192.168.0.5:9100',
+      ]);
+    });
+
     // Fence: the permission guard must not turn an ordinary closed port into
     // a failed sweep — a refused host is simply not a printer.
     test(

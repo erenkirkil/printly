@@ -82,6 +82,31 @@ void main() {
     },
   );
 
+  // `SocketException.message` alone is often just "Connection failed"; the
+  // errno lives in `osError`. Without it a refused, an unreachable and an
+  // iOS local-network-permission failure all read the same in the log.
+  test('a failed dial keeps the OS error and errno in the reason', () async {
+    final TcpPrinterTransport transport = TcpPrinterTransport(
+      connector: (String host, int port, {Duration? timeout}) async {
+        throw const SocketException(
+          'Connection failed',
+          osError: OSError('No route to host', 65),
+        );
+      },
+    );
+    final PrintlyDevice device = deviceFor(9100);
+    final Future<PrintlyConnectionEvent> errEvent = transport.events.first;
+
+    await transport.connect(device);
+    final PrintlyConnectionEvent event = await errEvent;
+    expect(event.state, ConnectionState.error);
+    expect(event.failureReason, contains('connect_failed'));
+    expect(event.failureReason, contains('No route to host'));
+    expect(event.failureReason, contains('errno = 65'));
+
+    await transport.dispose();
+  });
+
   test('connect timeout reports connect_timeout on the event stream when the '
       'connector never completes', () async {
     final Completer<Socket> never = Completer<Socket>();

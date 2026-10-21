@@ -99,6 +99,10 @@ class NetworkPrinterDiscovery {
   /// Android `INTERNET` permission or a sandbox without network access. Every
   /// probe would fail the same way, so the sweep stops at the first one
   /// rather than returning an empty list that reads as "no printers here".
+  /// It throws the same when nearly every probe (90 %) failed with
+  /// `EHOSTUNREACH` and
+  /// nothing answered — how iOS reports a denied Local Network permission.
+  /// One unreachable host among timeouts or live printers is not enough.
   static Future<List<PrintlyDevice>> discover({
     String? subnet,
     Iterable<String>? hosts,
@@ -159,6 +163,9 @@ class NetworkPrinterDiscovery {
     final List<bool> reachable = List<bool>.filled(candidates.length, false);
     int nextIndex = 0;
     PrintlyScanException? permissionError;
+    int probed = 0;
+    int hostUnreachable = 0;
+    String? firstUnreachable;
 
     Future<void> worker() async {
       while (permissionError == null) {
@@ -173,12 +180,19 @@ class NetworkPrinterDiscovery {
           continue;
         }
         try {
-          reachable[index] = await _probeHost(
+          final _Probe probe = await _probeHost(
             connect: connect,
             host: host,
             port: port,
             probeTimeout: probeTimeout,
           );
+          probed++;
+          reachable[index] = probe.open;
+          final String? unreachable = probe.hostUnreachable;
+          if (unreachable != null) {
+            hostUnreachable++;
+            firstUnreachable ??= unreachable;
+          }
         } on PrintlyScanException catch (e) {
           permissionError ??= e;
         }
@@ -197,6 +211,23 @@ class NetworkPrinterDiscovery {
     );
     final PrintlyScanException? denied = permissionError;
     if (denied != null) throw denied;
+    // iOS refuses dials with EHOSTUNREACH while Local Network access is
+    // denied. Measured on an iPhone 16: denied, 252 of 253 probes failed with
+    // it and one still timed out; granted, back-to-back sweeps gave none (2
+    // open, 251 timeouts). So a sweep where nothing answered and at least
+    // [_deniedUnreachableShare] of the probes were EHOSTUNREACH is read as the
+    // denial; a few unreachable hosts among timeouts stay ordinary noise.
+    if (probed > 0 &&
+        hostUnreachable >= probed * _deniedUnreachableShare &&
+        !reachable.contains(true)) {
+      throw PrintlyScanException(
+        PrintlyErrorCode.permissionDenied,
+        '$hostUnreachable of $probed probes failed with "no route to host": '
+        '$firstUnreachable'
+        '${Platform.isIOS ? ' — allow Local Network access for this app in '
+                  'Settings → Privacy & Security → Local Network' : ''}',
+      );
+    }
 
     final List<PrintlyDevice> found = <PrintlyDevice>[];
     for (int i = 0; i < candidates.length; i++) {
@@ -214,8 +245,10 @@ class NetworkPrinterDiscovery {
   /// the socket immediately on success.
   ///
   /// Throws [PrintlyScanException] for a permission failure (see [discover]);
-  /// every other failure means "not a printer" and returns `false`.
-  static Future<bool> _probeHost({
+  /// every other failure means "not a printer". An `EHOSTUNREACH` failure is
+  /// still reported, because the sweep as a whole decides whether it was a
+  /// denied iOS Local Network permission.
+  static Future<_Probe> _probeHost({
     required SocketConnector connect,
     required String host,
     required int port,
@@ -234,7 +267,7 @@ class NetworkPrinterDiscovery {
     try {
       final Socket socket = await pending.timeout(probeTimeout);
       socket.destroy();
-      return true;
+      return const _Probe.open();
     } on TimeoutException {
       // Absorb late completions and errors so a slow host that finishes after
       // the probe deadline neither leaks a file descriptor nor triggers an
@@ -245,7 +278,7 @@ class NetworkPrinterDiscovery {
           onError: (Object _, StackTrace _) {},
         ),
       );
-      return false;
+      return const _Probe.closed();
     } on SocketException catch (e) {
       final OSError? os = e.osError;
       if (os != null && (os.errorCode == _eacces || os.errorCode == _eperm)) {
@@ -255,15 +288,28 @@ class NetworkPrinterDiscovery {
           '${Platform.isAndroid ? ' — declare android.permission.INTERNET' : ''}',
         );
       }
-      return false;
+      if (os != null && os.errorCode == _ehostunreachDarwin) {
+        return _Probe.hostUnreachable(
+          '${e.message} (${os.message}, errno = ${os.errorCode}; $host:$port)',
+        );
+      }
+      return const _Probe.closed();
     } on Object {
-      return false;
+      return const _Probe.closed();
     }
   }
 
   // Same values on Linux/Android and Darwin.
   static const int _eperm = 1;
   static const int _eacces = 13;
+
+  // Darwin only: Linux/Android number EHOSTUNREACH 113, and their 65
+  // (ENOPKG) never comes out of connect(), so no platform check is needed.
+  static const int _ehostunreachDarwin = 65;
+
+  /// Share of EHOSTUNREACH probes at or above which a silent sweep is a
+  /// denied iOS Local Network permission (measured 0.996 denied, 0 granted).
+  static const double _deniedUnreachableShare = 0.9;
 
   static Future<List<String>> _resolveCandidates({
     required String? subnet,
@@ -409,4 +455,22 @@ class NetworkPrinterDiscovery {
     }
     return true;
   }
+}
+
+/// Outcome of one zero-write probe.
+class _Probe {
+  const _Probe.open() : open = true, hostUnreachable = null;
+
+  const _Probe.closed() : open = false, hostUnreachable = null;
+
+  /// [detail] describes the `EHOSTUNREACH` failure for the sweep's error.
+  const _Probe.hostUnreachable(String detail)
+    : open = false,
+      hostUnreachable = detail;
+
+  /// Whether a socket was accepted on the probed port.
+  final bool open;
+
+  /// The failure detail when the dial failed with `EHOSTUNREACH`, else `null`.
+  final String? hostUnreachable;
 }

@@ -175,7 +175,7 @@ class TcpPrinterTransport {
         ConnectionState.error,
         failureReason:
             '${PrintlyErrorCode.connectFailed.wireName}: '
-            '${e.message} (${addr.canonical})'
+            '${e.message}${_osErrorSuffix(e.osError)} (${addr.canonical})'
             '${Platform.isAndroid ? ' — declare android.permission.INTERNET' : ''}',
       );
       return;
@@ -327,6 +327,13 @@ class TcpPrinterTransport {
     final Duration reduced = timeout - kNetworkTimeoutHeadroom;
     return reduced > Duration.zero ? reduced : timeout;
   }
+
+  /// `, <os message> (errno = N)` for a dial failure, or nothing when the
+  /// exception carries no OS error. [SocketException.message] is often a bare
+  /// "Connection failed"; the errno is what tells a refused port, an
+  /// unreachable host and a denied iOS local-network permission apart.
+  static String _osErrorSuffix(OSError? os) =>
+      os == null ? '' : ', ${os.message} (errno = ${os.errorCode})';
 
   bool _cancelled(String key, int epoch) => (_dialEpochs[key] ?? 0) != epoch;
 
