@@ -22,11 +22,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  plugin_platform_interface: ^2.1.8
-  esc_pos_utils_plus: ^2.0.4
-  permission_handler: ^12.0.1
+
   rxdart: ^0.28.0
+  esc_pos_utils_plus: ^2.0.4
   shared_preferences: ^2.5.5
+  permission_handler: ^12.0.1
+  plugin_platform_interface: ^2.1.8
 
 dev_dependencies:
   flutter_test:
