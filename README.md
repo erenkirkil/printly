@@ -352,6 +352,11 @@ it, to keep the permission out of Bluetooth-only apps:
 <uses-permission android:name="android.permission.INTERNET"/>
 ```
 
+Without it, `discoverNetworkPrinters()` throws a `PrintlyScanException` with
+`PrintlyErrorCode.permissionDenied` (rather than reporting "no printers"), and
+`connect()` fails with `PrintlyErrorCode.connectFailed`; both messages name the
+missing permission.
+
 **iOS:** connecting to a printer on the local network triggers the iOS 14+
 local-network permission. Add a usage description to `ios/Runner/Info.plist`:
 
@@ -360,13 +365,42 @@ local-network permission. Add a usage description to `ios/Runner/Info.plist`:
 <string>Used to print to your network printer.</string>
 ```
 
-A denied local-network permission surfaces as
-`PrintlyErrorCode.connectFailed`.
+iOS reports a denied local-network permission as "no route to host"
+(`EHOSTUNREACH`, errno 65) on every dial. `discoverNetworkPrinters()` turns a
+sweep in which nothing answered and nearly every probe failed that way into a
+`PrintlyScanException` with `PrintlyErrorCode.permissionDenied`, whose message
+points to Settings → Privacy & Security → Local Network. `connect()` fails with
+`PrintlyErrorCode.connectFailed`, and its message carries the OS error and
+errno. Measured on iOS 27 with the permission refused both at the first-run
+prompt and later in Settings.
 
 **Testing against a fake:** a `PrintlyPlatform` fake never sees network
 `connect`/`write` calls — the TCP transport lives in Dart, above the platform
 interface. Fake the Bluetooth path through `PrintlyPlatform`; test the network
 path against a real loopback `ServerSocket`.
+
+### Several counters on one LAN
+
+A TCP/9100 printer has no identity a scan can read: a responding socket says
+"something prints here", not "this is counter 3's printer". Plan the network
+so the app never has to guess:
+
+- **One terminal, one printer.** Give each printer a static IP outside the
+  DHCP pool, or a DHCP reservation, and label the printer with it. Store that
+  address in the app per counter; a DHCP lease shuffle between two identical
+  printers otherwise sends receipts to the wrong counter without any error.
+- **Treat scan results as candidates.** `discoverNetworkPrinters()` returns
+  every host listening on 9100, and office laser printers listen there too.
+  Sending ESC/POS to a PCL/PostScript printer prints pages of garbage. Confirm
+  a candidate against the printer's self-test page (it prints its IP) before
+  saving it, and never connect to the only result automatically: the real
+  printer may just be off.
+- **Keep printers off guest Wi-Fi.** Port 9100 has no authentication, and
+  guest networks usually isolate clients from each other, so the terminal
+  could not reach the printer anyway. A staff VLAN keeps both properties.
+- **Choose printers you can pin.** Prefer models with a front-panel or
+  config-file static IP setting; a printer that only does DHCP needs a router
+  reservation to stay put.
 
 ## Platform setup
 
@@ -522,13 +556,11 @@ before the apps that depend on it:
 | Printer | Transport | Paper | Notes |
 | --- | --- | --- | --- |
 | Cashino PTP-II | Classic (SPP) + BLE | 58 mm | Text/QR/barcode verified on Android 12; BLE print verified from iOS. **Ignores `ESC t` entirely** (pages 0–50 swept, none took effect) — Turkish works here through the raster path, verified on paper. Supports `GS v 0`; no cutter, and it answers the cut command by feeding blank paper. |
-| Custom TK180 | Network (TCP/9100) | 52 mm ticket | Text/align/feed and `GS V 0` full cut verified from macOS over Ethernet. `ESC t` **is** honoured, but Turkish code pages (PC857/WPC1254) are not installed in this firmware — Turkish prints through the raster path (`GS v 0`), verified on paper. DHCP off from the factory (static IP). |
+| Custom TK180 | Network (TCP/9100) | 52 mm ticket | Connect, LAN discovery and Turkish raster receipts verified on paper through printly from Android; connect and discovery from iOS. `ESC t` **is** honoured, but Turkish code pages (PC857/WPC1254) are not installed in this firmware — Turkish prints through the raster path (`GS v 0`). **Pre-notched ticket stock:** `GS V` cuts wherever the content ends, not on the notch; cut with Custom's `GS F8` (align to cutter) + `ESC i` sent through `raw()` and drop the trailing feed — the example's *Ticket mode* does this. The printer aligns loaded stock itself, so an extra `GS F6` (align to print head) feeds one blank ticket. No SNMP, no web interface; accepted a second TCP connection while one was open. DHCP off from the factory (static IP). |
 
-Two printers so far, and the two rows carry different weight: the PTP-II was
-driven by printly itself on Android and iOS, while the TK180 row records what
-the printer does with raw ESC/POS sent over a socket from macOS — a printly
-network round on that device is the next item on the hardware queue. Support
-beyond these device classes is the goal, not a claim.
+Two printers so far: the PTP-II was driven by printly on Android and iOS, and
+the TK180 by printly over the network on Android (printing) and iOS (connect
+and discovery). Support beyond these device classes is the goal, not a claim.
 
 ## License
 
