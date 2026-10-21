@@ -1,5 +1,5 @@
 name: printly
-description: "Thermal printer SDK for Flutter. Bluetooth Classic + BLE, ESC/POS receipts (text, barcode, QR), and Turkish that prints even on printers that ignore code pages."
+description: "Thermal printer SDK for Flutter. Bluetooth Classic + BLE + Ethernet/Wi-Fi (TCP 9100), ESC/POS receipts (text, barcode, QR), and Turkish even on printers that ignore code pages."
 version: 0.4.0
 homepage: https://github.com/erenkirkil/printly
 repository: https://github.com/erenkirkil/printly
@@ -22,11 +22,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  plugin_platform_interface: ^2.1.8
-  esc_pos_utils_plus: ^2.0.4
-  permission_handler: ^12.0.1
+
   rxdart: ^0.28.0
+  esc_pos_utils_plus: ^2.0.4
   shared_preferences: ^2.5.5
+  permission_handler: ^12.0.1
+  plugin_platform_interface: ^2.1.8
 
 dev_dependencies:
   flutter_test:

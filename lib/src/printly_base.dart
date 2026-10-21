@@ -16,6 +16,8 @@ import 'core/connection_type.dart';
 import 'core/printly_device.dart';
 import 'core/printly_exception.dart';
 import 'core/printly_permission_status.dart';
+import 'network/network_discovery.dart';
+import 'platform/network_routing_platform.dart';
 import 'platform/printly_platform_interface.dart';
 import 'print/print_config.dart';
 import 'print/print_job.dart';
@@ -44,7 +46,24 @@ class Printly {
 
   final BluetoothManager _bluetooth = BluetoothManager();
   final ScanController _scan = ScanController();
-  final ConnectionController _connection = ConnectionController();
+
+  /// Facade-local platform that routes network-transport calls to a Dart TCP
+  /// socket and every Bluetooth call to [PrintlyPlatform.instance]. Built once
+  /// per facade so the connection controller and [print] share one merged
+  /// connection-event stream — without that, a network connect would open a
+  /// socket the controller never hears about and its state machine would sit
+  /// at `connecting` until the timeout.
+  ///
+  /// [PrintlyPlatform.instance] itself is deliberately left untouched: a
+  /// consumer's own fake stays the inner platform, and the decorator is never
+  /// installed globally.
+  final NetworkRoutingPlatform _platform = NetworkRoutingPlatform(
+    inner: PrintlyPlatform.instance,
+  );
+
+  late final ConnectionController _connection = ConnectionController(
+    platform: _platform,
+  );
 
   /// Ref-count registry for every [PrintlyScanSession] created through
   /// [newScanSession], scoped to this facade instance (and therefore to
@@ -405,6 +424,43 @@ class Printly {
     resolveDefaultTimeout: () => defaultScanTimeout,
   );
 
+  /// Sweeps the local IPv4 `/24` network (or an explicit [subnet] / [hosts]
+  /// list) for thermal printers listening on TCP [port] (default `9100`) and
+  /// returns a [PrintlyDevice.network] for each responsive host.
+  ///
+  /// Use this when a DHCP-configured Ethernet/Wi-Fi printer is moved to a
+  /// different wall port or obtains a new lease after a router reboot, or to
+  /// let the user pick a LAN printer without typing its IP by hand.
+  ///
+  /// Each host is checked with a **zero-write TCP handshake** (the socket is
+  /// closed via `Socket.destroy()` immediately on connect without sending any
+  /// bytes), so non-ESC/POS printers on port 9100 never print garbage and
+  /// single-socket thermal printers are never left wedged. Any network printer
+  /// already connected through this [Printly] instance is preserved in the
+  /// returned list without opening a second socket.
+  ///
+  /// Typical sweep time for a 254-host `/24` subnet with the default
+  /// [probeTimeout] (`200 ms`) and [concurrency] (`48`) is ~1.2 seconds.
+  ///
+  /// Throws [PrintlyScanException] with [PrintlyErrorCode.permissionDenied]
+  /// when the OS refuses to open sockets (on Android: `INTERNET` is missing
+  /// from the app's manifest; on iOS: Local Network access is denied)
+  /// instead of returning an empty list.
+  Future<List<PrintlyDevice>> discoverNetworkPrinters({
+    String? subnet,
+    Iterable<String>? hosts,
+    int port = kDefaultNetworkPort,
+    Duration probeTimeout = kDefaultNetworkProbeTimeout,
+    int concurrency = kDefaultNetworkDiscoveryConcurrency,
+  }) => NetworkPrinterDiscovery.discover(
+    subnet: subnet,
+    hosts: hosts,
+    port: port,
+    probeTimeout: probeTimeout,
+    concurrency: concurrency,
+    activeAddresses: _platform.openNetworkAddresses,
+  );
+
   /// Opens a link to [device]. Idempotent for duplicate taps and serialises
   /// switching between two devices (disconnect current, then connect new).
   ///
@@ -424,9 +480,11 @@ class Printly {
   ///
   /// Completes with a [PrintlyConnectionException] when the attempt fails
   /// (its [PrintlyException.code] distinguishes timeouts, refusals, and
-  /// dropped links) and with a [PrintlyUnsupportedException] for
-  /// [ConnectionType.network] devices — the network transport ships in a
-  /// later release.
+  /// dropped links).
+  ///
+  /// Network (Ethernet/Wi-Fi) devices connect over a plain TCP socket
+  /// ([PrintlyDevice.network]); "connected" here means the socket is open,
+  /// not that the printer is ready — TCP gives no readiness signal.
   ///
   /// **Stop the scan first if one is running.** An in-flight scan is not
   /// cancelled here — silently ending something the app started would be a
@@ -442,14 +500,6 @@ class Printly {
     ConnectionType? transport,
     Duration timeout = kDefaultConnectTimeout,
   }) async {
-    if (device.availableTransports.contains(ConnectionType.network)) {
-      // Fail fast with a typed error instead of a native round-trip that
-      // would reject with the same reason after a delay.
-      throw const PrintlyUnsupportedException(
-        PrintlyErrorCode.networkNotSupported,
-        'Network (Ethernet/WiFi) printing is not implemented yet.',
-      );
-    }
     return _connection.connect(device, transport: transport, timeout: timeout);
   }
 
@@ -523,7 +573,7 @@ class Printly {
     } catch (error, stackTrace) {
       return Future<void>.error(error, stackTrace);
     }
-    return PrintlyPlatform.instance.write(
+    return _platform.write(
       device: device,
       transport: transport,
       bytes: job.build(),

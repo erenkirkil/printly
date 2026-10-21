@@ -14,8 +14,6 @@ dependencies:
   printly:
     path: ../
 
-  cupertino_icons: ^1.0.8
-
 dev_dependencies:
   integration_test:
     sdk: flutter

@@ -1,3 +1,41 @@
+## Unreleased
+
+### Added
+
+- **Network (Ethernet/Wi-Fi) printing over TCP.** `PrintlyDevice.network(host:,
+  port:)` devices now connect, print and disconnect over a plain Dart socket
+  (raw ESC/POS, default port 9100) — no native code, no wire-protocol change.
+  Connect/print/disconnect and the per-device `ConnectionState`,
+  `activeDeviceStream` and `transportOf` streams behave the same as Bluetooth.
+  "Connected" means the socket is open (TCP has no readiness signal the way
+  BLE service discovery does). `ConnectionType.network` no longer rejects with
+  `network_not_supported`; that code remains in the vocabulary for backward
+  compatibility but is never thrown. Android apps must declare
+  `android.permission.INTERNET` themselves — the plugin does not declare it,
+  so Bluetooth-only apps do not inherit it — and iOS apps should add
+  `NSLocalNetworkUsageDescription`. A Custom TK180 was verified to accept
+  this byte stream over Ethernet, but from macOS over a raw socket rather
+  than through printly; the printly-driven round on that printer is still
+  queued.
+
+- **LAN thermal printer discovery (`discoverNetworkPrinters`).** Sweeps the
+  local RFC 1918 IPv4 `/24` subnet (or a caller-supplied `subnet` / `hosts`
+  list) on TCP port 9100 (`kDefaultNetworkPort`) with a bounded concurrent
+  worker pool (`kDefaultNetworkDiscoveryConcurrency = 48`,
+  `kDefaultNetworkProbeTimeout = 200 ms`, ~1.2 s for a full 254-host `/24`).
+  Probes use a **zero-write TCP handshake** (`Socket.connect` followed
+  immediately by `Socket.destroy()`) so non-ESC/POS office printers on port
+  9100 never print probe bytes as garbage pages and printers that reject
+  unknown commands never print `COMMAND ERROR`. Already-connected network
+  printers held by the same `Printly` instance are included without opening a
+  second TCP connection, protecting single-socket embedded Ethernet stacks
+  (`lwIP` / W5500). A sweep the OS refuses to run (`EACCES` / `EPERM`, e.g. a
+  missing Android `INTERNET` permission, or nearly every probe failing with
+  `EHOSTUNREACH`, which is how iOS reports denied Local Network access) throws
+  `PrintlyScanException` with `PrintlyErrorCode.permissionDenied` rather than
+  reporting "no printers". Network connect failures now carry the OS error
+  message and errno.
+
 ## 0.4.0 — 2026-10-11
 
 ### Added

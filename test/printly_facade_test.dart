@@ -4,6 +4,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
@@ -388,6 +389,119 @@ void main() {
             ),
           ),
         );
+      },
+    );
+  });
+
+  group('network transport', () {
+    late ServerSocket server;
+    late List<int> received;
+    late StreamSubscription<Socket> accepts;
+
+    setUp(() async {
+      server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      received = <int>[];
+      accepts = server.listen((Socket s) {
+        s.listen((List<int> data) => received.addAll(data));
+      });
+    });
+
+    tearDown(() async {
+      await accepts.cancel();
+      await server.close();
+    });
+
+    test('connect -> print -> disconnect over TCP loopback', () async {
+      // The facade builds its NetworkRoutingPlatform around
+      // PrintlyPlatform.instance at construction. The _FakePlatform set in
+      // the outer setUp is the inner (Bluetooth) side; the network side is a
+      // real Dart socket regardless, so this test does not touch the fake.
+      final Printly printly = Printly.forTesting();
+      final PrintlyDevice net = PrintlyDevice.network(
+        host: '127.0.0.1',
+        port: server.port,
+      );
+
+      await printly.connect(net);
+      expect(printly.activeDevice?.address, net.address);
+      expect(printly.transportOf(net), ConnectionType.network);
+
+      final PrintJob job = await printly.newJob();
+      job.text('hi');
+      await printly.print(net, job);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(received, isNotEmpty);
+      expect(platform.writeCalls, 0); // never reached the Bluetooth platform.
+
+      await printly.disconnect(device: net);
+      expect(printly.activeDevice, isNull);
+    });
+
+    test('connect to a network device no longer throws '
+        'PrintlyUnsupportedException', () async {
+      final Printly printly = Printly.forTesting();
+      final PrintlyDevice net = PrintlyDevice.network(
+        host: '127.0.0.1',
+        port: server.port,
+      );
+      // Must not throw networkNotSupported.
+      await printly.connect(net);
+      await printly.disconnect(device: net);
+    });
+
+    test(
+      'discoverNetworkPrinters finds a loopback listener and preserves an '
+      'already-connected single-socket printer without re-dialing it',
+      () async {
+        int acceptCount = 0;
+        final ServerSocket singleSocketPrinter = await ServerSocket.bind(
+          InternetAddress.loopbackIPv4,
+          0,
+        );
+        final StreamSubscription<Socket> sub = singleSocketPrinter.listen((
+          Socket s,
+        ) {
+          acceptCount++;
+        });
+        addTearDown(() async {
+          await sub.cancel();
+          await singleSocketPrinter.close();
+        });
+
+        final Printly printly = Printly.forTesting();
+
+        // 1. Unconnected discovery probes the port once and finds the printer.
+        final List<PrintlyDevice> beforeConnect = await printly
+            .discoverNetworkPrinters(
+              hosts: <String>['127.0.0.1'],
+              port: singleSocketPrinter.port,
+            );
+        expect(beforeConnect.length, 1);
+        expect(
+          beforeConnect.single.address,
+          '127.0.0.1:${singleSocketPrinter.port}',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(acceptCount, 1);
+
+        // 2. Connect to the discovered printer (acceptCount becomes 2).
+        await printly.connect(beforeConnect.single);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(acceptCount, 2);
+
+        // 3. Running discoverNetworkPrinters while connected must still include
+        //    the active printer WITHOUT opening a third TCP connection.
+        final List<PrintlyDevice> whileConnected = await printly
+            .discoverNetworkPrinters(
+              hosts: <String>['127.0.0.1'],
+              port: singleSocketPrinter.port,
+            );
+        expect(whileConnected.length, 1);
+        expect(whileConnected.single.address, beforeConnect.single.address);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(acceptCount, 2);
+
+        await printly.disconnect(device: beforeConnect.single);
       },
     );
   });

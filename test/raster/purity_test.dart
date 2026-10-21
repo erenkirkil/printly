@@ -20,6 +20,15 @@ void main() {
     'lib/src/raster/raster_encoder.dart',
   ];
 
+  // Dart accepts either quote style and no lint here forces one
+  // (`prefer_single_quotes` is not enabled), so this needle must be
+  // quote-agnostic: a `contains("'dart:ui'")` check would wave
+  // `import "dart:ui";` straight through with every gate green. `dart:ui_web`
+  // is the web-only twin and is just as much a renderer dependency.
+  final RegExp renderer = RegExp(
+    r'''(['"])dart:ui(_web)?\1|package:flutter/''',
+  );
+
   for (final String path in pureFiles) {
     test('$path imports no renderer', () {
       final File file = File(path);
@@ -32,8 +41,7 @@ void main() {
                 !trimmed.startsWith('export ')) {
               return false;
             }
-            return trimmed.contains("'dart:ui'") ||
-                trimmed.contains("package:flutter/");
+            return renderer.hasMatch(trimmed);
           })
           .toList(growable: false);
       expect(

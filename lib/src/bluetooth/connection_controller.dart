@@ -48,6 +48,12 @@ const String _disconnectedDuringConnectMessage =
 /// whichever device is currently connected.
 class ConnectionController {
   /// Creates a controller that delegates native work to [platform].
+  ///
+  /// The `Printly` facade passes its own `NetworkRoutingPlatform` here rather
+  /// than letting this default to [PrintlyPlatform.instance]: that decorator
+  /// serves [ConnectionType.network] from a Dart TCP socket and merges its
+  /// lifecycle events into the same stream, which is what lets the state
+  /// machine below treat a network link exactly like a Bluetooth one.
   ConnectionController({PrintlyPlatform? platform})
     : _platform = platform ?? PrintlyPlatform.instance {
     _eventsSubscription = _platform.connectionEvents.listen(
@@ -111,11 +117,8 @@ class ConnectionController {
   /// * [explicit] != `null` → use it, but only if it is one of
   ///   [PrintlyDevice.availableTransports]; otherwise [ArgumentError].
   /// * [PrintlyDevice.availableTransports] contains [ConnectionType.network]
-  ///   → [ConnectionType.network]. (In practice the facade's `connect()`
-  ///   fails fast with `PrintlyUnsupportedException(networkNotSupported)`
-  ///   before this function is ever reached for a network device, since that
-  ///   transport is not implemented yet — this branch exists so the pure
-  ///   rule stays total.)
+  ///   → [ConnectionType.network]. The facade routes this transport to a
+  ///   Dart TCP socket via `NetworkRoutingPlatform`.
   /// * [isIOS] → [ConnectionType.ble] if available; otherwise
   ///   [PrintlyUnsupportedException] with
   ///   [PrintlyErrorCode.classicRequiresMfi] — iOS cannot open Bluetooth
