@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:io';
 
 import '../core/printly_device.dart';
+import '../core/printly_exception.dart';
 import 'network_address.dart';
 import 'tcp_printer_transport.dart';
 
@@ -92,6 +93,12 @@ class NetworkPrinterDiscovery {
   /// accept only a single concurrent socket on port 9100, so probing an
   /// already-connected printer would either be refused (hiding the connected
   /// printer from scan results) or reset the active connection.
+  ///
+  /// Throws [PrintlyScanException] with [PrintlyErrorCode.permissionDenied]
+  /// when a dial fails with `EACCES` / `EPERM` — the signature of a missing
+  /// Android `INTERNET` permission or a sandbox without network access. Every
+  /// probe would fail the same way, so the sweep stops at the first one
+  /// rather than returning an empty list that reads as "no printers here".
   static Future<List<PrintlyDevice>> discover({
     String? subnet,
     Iterable<String>? hosts,
@@ -151,9 +158,10 @@ class NetworkPrinterDiscovery {
     final SocketConnector connect = connector ?? Socket.connect;
     final List<bool> reachable = List<bool>.filled(candidates.length, false);
     int nextIndex = 0;
+    PrintlyScanException? permissionError;
 
     Future<void> worker() async {
-      while (true) {
+      while (permissionError == null) {
         final int index = nextIndex;
         if (index >= candidates.length) return;
         nextIndex = index + 1;
@@ -164,12 +172,16 @@ class NetworkPrinterDiscovery {
           reachable[index] = true;
           continue;
         }
-        reachable[index] = await _probeHost(
-          connect: connect,
-          host: host,
-          port: port,
-          probeTimeout: probeTimeout,
-        );
+        try {
+          reachable[index] = await _probeHost(
+            connect: connect,
+            host: host,
+            port: port,
+            probeTimeout: probeTimeout,
+          );
+        } on PrintlyScanException catch (e) {
+          permissionError ??= e;
+        }
       }
     }
 
@@ -183,6 +195,8 @@ class NetworkPrinterDiscovery {
         growable: false,
       ),
     );
+    final PrintlyScanException? denied = permissionError;
+    if (denied != null) throw denied;
 
     final List<PrintlyDevice> found = <PrintlyDevice>[];
     for (int i = 0; i < candidates.length; i++) {
@@ -198,6 +212,9 @@ class NetworkPrinterDiscovery {
 
   /// Performs a zero-write TCP connect probe to `[host]:[port]` and destroys
   /// the socket immediately on success.
+  ///
+  /// Throws [PrintlyScanException] for a permission failure (see [discover]);
+  /// every other failure means "not a printer" and returns `false`.
   static Future<bool> _probeHost({
     required SocketConnector connect,
     required String host,
@@ -229,10 +246,24 @@ class NetworkPrinterDiscovery {
         ),
       );
       return false;
+    } on SocketException catch (e) {
+      final OSError? os = e.osError;
+      if (os != null && (os.errorCode == _eacces || os.errorCode == _eperm)) {
+        throw PrintlyScanException(
+          PrintlyErrorCode.permissionDenied,
+          '${e.message} (${os.message}, errno = ${os.errorCode}; $host:$port)'
+          '${Platform.isAndroid ? ' — declare android.permission.INTERNET' : ''}',
+        );
+      }
+      return false;
     } on Object {
       return false;
     }
   }
+
+  // Same values on Linux/Android and Darwin.
+  static const int _eperm = 1;
+  static const int _eacces = 13;
 
   static Future<List<String>> _resolveCandidates({
     required String? subnet,

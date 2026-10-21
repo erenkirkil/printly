@@ -56,6 +56,12 @@ class NetworkViewModel extends ChangeNotifier {
   /// command manual 915AH020300700, "Alignment"). They have no standard
   /// ESC/POS equivalent: `GS FF`, the usual "feed to black mark", is answered
   /// with COMMAND ERROR on this firmware.
+  ///
+  /// Sent only by [alignTicket], never as part of a print job: the TK180
+  /// aligns freshly loaded stock by itself and `ESC i` retracts the paper to
+  /// the next ticket's top edge, so on already-aligned paper this command
+  /// advances a whole ticket and the job comes out as one printed ticket plus
+  /// a blank one.
   static const List<int> _alignToPrintHead = <int>[0x1D, 0xF6];
 
   /// Advance the ticket until the notch sits under the cutting line.
@@ -63,9 +69,9 @@ class NetworkViewModel extends ChangeNotifier {
 
   /// Total cut. Custom's command manual does not document `GS V` at all —
   /// which is the cut printly emits for [PrintConfig.cutAfterPrint] and
-  /// [PrintJob.cut], so on this device that cut never lands and the paper is
-  /// left mid-ticket. Every later job then starts misaligned, which is what
-  /// made receipts straddle the perforations.
+  /// [PrintJob.cut]. The TK180 still cuts on it, but wherever the content
+  /// ended rather than on the notch, so the paper is left mid-ticket and every
+  /// later job starts misaligned.
   static const List<int> _totalCut = <int>[0x1B, 0x69];
 
   final ActionLogViewModel _log;
@@ -83,7 +89,6 @@ class NetworkViewModel extends ChangeNotifier {
   bool _scanning = false;
   bool _started = false;
   bool _ticketMode = false;
-  bool _alignedSinceConnect = false;
   final List<String> _recents = <String>[];
   final List<PrintlyDevice> _discovered = <PrintlyDevice>[];
 
@@ -123,7 +128,7 @@ class NetworkViewModel extends ChangeNotifier {
   /// persistent storage), most recent first.
   List<String> get recents => UnmodifiableListView<String>(_recents);
 
-  /// Printers found by the most recent [scanNetwork] or auto-recovery sweep.
+  /// Printers found by the most recent [scanNetwork] or failed-[connect] sweep.
   List<PrintlyDevice> get discovered =>
       UnmodifiableListView<PrintlyDevice>(_discovered);
 
@@ -146,41 +151,19 @@ class NetworkViewModel extends ChangeNotifier {
   /// Whether a print can be sent now.
   bool get canPrint => _state == ConnectionState.connected && !_busy;
 
-  /// Whether to wrap each job in Custom's ticket-alignment commands.
+  /// Whether to end each job with Custom's cut-on-the-notch commands.
   ///
   /// Turn this on for fixed-length pre-notched ticket stock (a Custom TK180
-  /// and its kin), where every job has to start at a ticket's top edge and be
-  /// cut on its boundary. Leave it off for continuous roll paper, where there
-  /// is no notch to align to and these commands would simply stall waiting for
-  /// a mark that never arrives.
+  /// and its kin), where every job has to be cut on a ticket's boundary. Leave
+  /// it off for continuous roll paper, where there is no notch to align to and
+  /// these commands would simply stall waiting for a mark that never arrives.
   bool get ticketMode => _ticketMode;
 
   set ticketMode(bool value) {
     if (_ticketMode == value) return;
     _ticketMode = value;
-    // Switching modes says nothing about where the paper stopped, so the next
-    // ticket job re-aligns rather than assuming.
-    _alignedSinceConnect = false;
     notifyListeners();
   }
-
-  /// Whether the next ticket job has to open with the align-to-print-head
-  /// command (`GS F6`).
-  ///
-  /// True only for the first job after connecting. `ESC i` already retracts
-  /// the paper to the next ticket's top edge, so sending `GS F6` again on
-  /// already-aligned paper advances a whole extra ticket — measured on a
-  /// TK180: identical jobs printed one ticket without it and one ticket plus
-  /// a blank with it. The first job of a session still needs it, because a
-  /// reload can leave the paper anywhere.
-  bool get needsTicketAlignment => _ticketMode && !_alignedSinceConnect;
-
-  /// Records that the paper is now notch-aligned, so later jobs skip `GS F6`.
-  void markTicketAligned() => _alignedSinceConnect = true;
-
-  /// Re-arms [needsTicketAlignment]. Called on every connect, where the paper
-  /// may have been reloaded while the socket was closed.
-  void resetTicketAlignment() => _alignedSinceConnect = false;
 
   /// Begins observing the connection state of the current device and restores
   /// the last connected network printer from storage.
@@ -285,11 +268,14 @@ class NetworkViewModel extends ChangeNotifier {
 
   /// Opens a TCP connection to the current device.
   ///
-  /// If connecting to [device] fails (for example, the printer was moved to
-  /// another Ethernet port or the router assigned a new DHCP lease after a
-  /// reboot), automatically sweeps the local LAN on [port]. When a single
-  /// replacement printer is found at a new IP, updates [host]/[port] and
-  /// connects to it transparently.
+  /// If connecting to [device] fails (for example, the router assigned the
+  /// printer a new DHCP lease after a reboot), sweeps the local LAN on [port]
+  /// and lists what answered in [discovered] — but never connects to it.
+  /// A lone responder on 9100 is not proof it is this counter's printer: the
+  /// real one may be powered off or held by another terminal (embedded
+  /// Ethernet stacks often accept a single socket), and the responder may be
+  /// another counter's printer or a PCL office printer that would print
+  /// ESC/POS bytes as garbage. The user confirms by picking it.
   Future<void> connect() async {
     final PrintlyDevice? d = device;
     if (d == null || _busy) return;
@@ -297,27 +283,25 @@ class NetworkViewModel extends ChangeNotifier {
     notifyListeners();
     try {
       await _connectDevice(d);
-      resetTicketAlignment();
       _log.success('network connect → ${d.address}');
       _remember(d.address);
     } catch (error) {
-      final bool recovered = await _tryAutoRecoverFromStaleAddress(
-        failedDevice: d,
-        originalError: error,
-      );
-      if (!recovered) {
-        _log.failure('network connect error → $error');
-      }
+      final int others = await _sweepAfterFailedConnect(d);
+      final String hint = others > 0
+          ? ' — $others other printer(s) on LAN; verify and pick one from '
+                'Discovered'
+          : '';
+      _log.failure('network connect error → $error$hint');
     } finally {
       _busy = false;
       notifyListeners();
     }
   }
 
-  Future<bool> _tryAutoRecoverFromStaleAddress({
-    required PrintlyDevice failedDevice,
-    required Object originalError,
-  }) async {
+  /// Refreshes [discovered] after [failed] could not be reached and returns
+  /// how many responders other than [failed] were found. Best-effort: a
+  /// failed sweep returns 0 and the connect error is reported on its own.
+  Future<int> _sweepAfterFailedConnect(PrintlyDevice failed) async {
     _scanning = true;
     notifyListeners();
     try {
@@ -325,32 +309,11 @@ class NetworkViewModel extends ChangeNotifier {
       _discovered
         ..clear()
         ..addAll(found);
-      final List<PrintlyDevice> candidates = found
-          .where((PrintlyDevice p) => p.address != failedDevice.address)
-          .toList(growable: false);
-      if (candidates.length == 1) {
-        final PrintlyDevice replacement = candidates.single;
-        useRecent(replacement.address);
-        await _connectDevice(replacement);
-        resetTicketAlignment();
-        _recents.remove(failedDevice.address);
-        _remember(replacement.address);
-        _log.success(
-          'network auto-recovered → ${replacement.address} '
-          '(was ${failedDevice.address})',
-        );
-        return true;
-      }
-      if (candidates.length > 1) {
-        _log.failure(
-          'network connect to ${failedDevice.address} failed ($originalError); '
-          'found ${candidates.length} printers on LAN — pick one from Discovered',
-        );
-        return true;
-      }
-      return false;
+      return found
+          .where((PrintlyDevice p) => p.address != failed.address)
+          .length;
     } on Object {
-      return false;
+      return 0;
     } finally {
       _scanning = false;
     }
@@ -393,7 +356,7 @@ class NetworkViewModel extends ChangeNotifier {
   /// [PrintJob.textRaster] renders through the engine and must be awaited — a
   /// raster receipt cannot be expressed as a template.
   Future<void> printTurkishRaster() => _send('turkish raster', () async {
-    final PrintJob job = await _newJob(
+    final PrintJob job = await newJob(
       PrintConfig(
         paperWidth: _settings.paperWidth,
         feedLines: 3,
@@ -428,7 +391,7 @@ class NetworkViewModel extends ChangeNotifier {
   /// A short receipt that ends in a cut — verifies the cutter, and on a
   /// printer without one shows up as roughly 25 mm of blank feed instead.
   Future<void> printCutTest() => _send('cut', () async {
-    final PrintJob job = await _newJob(
+    final PrintJob job = await newJob(
       PrintConfig(paperWidth: _settings.paperWidth),
     );
     job
@@ -443,39 +406,48 @@ class NetworkViewModel extends ChangeNotifier {
 
   Future<void> _run(String label, ReceiptTemplate template) =>
       _send(label, () async {
-        final PrintJob job = await _newJob(template.config);
+        final PrintJob job = await newJob(template.config);
         template.build(job);
         return job;
       });
 
   /// Creates the job every test prints through.
   ///
-  /// In [ticketMode] it does two things the plain `newJob` cannot: it drops
-  /// printly's automatic `GS V` cut, which this device does not implement, and
-  /// it opens the job with the align-to-print-head command so the first line
-  /// lands on the ticket's top edge instead of wherever the previous job
-  /// stopped.
-  Future<PrintJob> _newJob(PrintConfig config) async {
+  /// In [ticketMode] it drops printly's automatic `GS V` cut, which ignores
+  /// the notch (see [_totalCut]). It does not open the
+  /// job with the align-to-print-head command; see [_alignToPrintHead].
+  Future<PrintJob> newJob(PrintConfig config) => Printly.instance.newJob(
+    config: _ticketMode ? ticketJobConfig(config) : config,
+  );
+
+  /// Builds the job [alignTicket] sends: the align-to-print-head command on
+  /// its own, with no cut and no trailing feed.
+  Future<PrintJob> alignTicketJob() async {
     final PrintJob job = await Printly.instance.newJob(
-      config: _ticketMode ? ticketJobConfig(config) : config,
+      config: ticketJobConfig(PrintConfig(paperWidth: _settings.paperWidth)),
     );
-    if (needsTicketAlignment) {
-      job.raw(_alignToPrintHead);
-      markTicketAligned();
-    }
-    return job;
+    return job..raw(_alignToPrintHead);
   }
+
+  /// Feeds the paper to the next ticket's top edge.
+  ///
+  /// For when the paper is left mid-ticket — after a print with [ticketMode]
+  /// off, or a press of the printer's FEED key. Never needed after loading
+  /// stock or after a ticket-mode print: the printer is aligned already, and
+  /// this would feed one blank ticket.
+  Future<void> alignTicket() =>
+      _send('align ticket', alignTicketJob, cutOnNotch: false);
 
   /// Rewrites a roll-paper [config] for notched ticket stock.
   ///
   /// Two of the encoder's finalisers have to go. `cutAfterPrint` emits `GS V`,
-  /// which this device does not implement. `feedLines` is the subtler one:
+  /// which cuts without waiting for the notch. `feedLines` is the subtler one:
   /// [PrintJob.build] appends it *after* the job body, and the body is where
   /// [_send] put the align-to-cutter command and the `ESC i` cut — so the feed
-  /// lands after the cut and pushes the paper past the notch the blade just
-  /// used. The next job's `GS F6` then skips that half-fed ticket, which comes
-  /// out blank. On ticket stock the alignment command is the only trailing
-  /// feed a job needs; on roll paper the original config stays as it is.
+  /// lands after the cut and pushes the paper past the top edge `ESC i` just
+  /// retracted it to, and the next job starts mid-ticket. On ticket stock the
+  /// alignment command is the only trailing feed a job needs; on roll paper
+  /// the original config stays as it is.
   static PrintConfig ticketJobConfig(PrintConfig config) =>
       config.copyWith(cutAfterPrint: false, feedLines: 0);
 
@@ -484,14 +456,18 @@ class NetworkViewModel extends ChangeNotifier {
   /// [buildJob] differs between the tests — a template fills a job
   /// synchronously, a raster job has to await the engine first — so it stays a
   /// callback instead of being duplicated four times.
-  Future<void> _send(String label, Future<PrintJob> Function() buildJob) async {
+  Future<void> _send(
+    String label,
+    Future<PrintJob> Function() buildJob, {
+    bool cutOnNotch = true,
+  }) async {
     final PrintlyDevice? d = device;
     if (d == null || !canPrint) return;
     _busy = true;
     notifyListeners();
     try {
       final PrintJob job = await buildJob();
-      if (_ticketMode) {
+      if (_ticketMode && cutOnNotch) {
         // Order is Custom's, not ours: align to the cutter first, then cut.
         // Cutting without the alignment leaves the blade wherever the content
         // happened to end, which is the mid-ticket fragment this replaces.

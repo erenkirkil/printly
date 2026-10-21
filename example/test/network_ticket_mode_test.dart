@@ -7,11 +7,11 @@ import 'package:printly_example/viewmodel/action_log_view_model.dart';
 import 'package:printly_example/viewmodel/network_view_model.dart';
 import 'package:printly_example/viewmodel/settings_view_model.dart';
 
-/// Ticket mode wraps every job in Custom's alignment commands and ends it
-/// with `GS F8` (align to cutter) + `ESC i` (total cut). Anything the encoder
-/// appends *after* that cut moves paper past the notch the cut just landed on,
-/// and the next job's `GS F6` then skips the half-fed ticket — which comes out
-/// blank. This is the regression behind "one extra blank ticket per print".
+/// Ticket mode ends every job with `GS F8` (align to cutter) + `ESC i` (total
+/// cut), which retracts the paper to the next ticket's top edge. Anything the
+/// encoder appends *after* that cut moves the paper off that edge, and an
+/// align-to-print-head (`GS F6`) on already-aligned paper skips a whole
+/// ticket — both come out as "one extra blank ticket per print".
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -58,7 +58,12 @@ void main() {
     },
   );
 
-  group('align-to-print-head is emitted once per connection', () {
+  // The TK180 aligns the paper to the notch by itself when stock is loaded,
+  // and `ESC i` retracts it to the next ticket's top edge after every cut.
+  // `GS F6` on already-aligned paper advances a whole ticket, so a job that
+  // opens with it prints one full ticket plus a blank one — seen on paper on
+  // the first job after connecting, with freshly loaded stock.
+  group('align-to-print-head is never added to a job', () {
     late NetworkViewModel vm;
 
     setUp(() {
@@ -70,33 +75,45 @@ void main() {
 
     tearDown(() => vm.dispose());
 
-    test('a fresh connection needs the alignment command', () {
-      expect(vm.needsTicketAlignment, isTrue);
-    });
-
-    test('once aligned, later jobs must not send it again', () {
-      vm.markTicketAligned();
+    test('the first ticket-mode job does not open with GS F6', () async {
+      final PrintJob job = await vm.newJob(
+        PrintConfig(paperWidth: PrintlyPaperWidth.mm58),
+      );
       expect(
-        vm.needsTicketAlignment,
+        _containsSequence(job.build(), alignToPrintHead),
         isFalse,
         reason:
-            'ESC i already retracts the paper to the next ticket top; a '
-            'second GS F6 skips a whole ticket',
+            'the printer has already aligned the paper; GS F6 skips a '
+            'whole ticket, which comes out blank',
       );
     });
 
     test(
-      'reconnecting re-arms it, because the paper may have been reloaded',
-      () {
-        vm.markTicketAligned();
-        vm.resetTicketAlignment();
-        expect(vm.needsTicketAlignment, isTrue);
+      'the manual align job is GS F6 alone — no cut or feed after it',
+      () async {
+        final PrintJob job = await vm.alignTicketJob();
+        final Uint8List bytes = job.build();
+        expect(bytes.sublist(bytes.length - 2), alignToPrintHead);
+        expect(
+          _containsSequence(bytes, totalCut),
+          isFalse,
+          reason: 'aligning must not cut; the paper is not printed yet',
+        );
       },
     );
-
-    test('roll paper never asks for it', () {
-      vm.ticketMode = false;
-      expect(vm.needsTicketAlignment, isFalse);
-    });
   });
+}
+
+const List<int> alignToPrintHead = <int>[0x1D, 0xF6];
+
+bool _containsSequence(List<int> bytes, List<int> sequence) {
+  for (int i = 0; i + sequence.length <= bytes.length; i++) {
+    int matched = 0;
+    while (matched < sequence.length &&
+        bytes[i + matched] == sequence[matched]) {
+      matched++;
+    }
+    if (matched == sequence.length) return true;
+  }
+  return false;
 }

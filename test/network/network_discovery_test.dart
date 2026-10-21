@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:printly/src/core/connection_type.dart';
 import 'package:printly/src/core/printly_device.dart';
+import 'package:printly/src/core/printly_exception.dart';
 import 'package:printly/src/network/network_discovery.dart';
 
 void main() {
@@ -255,6 +256,110 @@ void main() {
         '192.168.0.6:9100',
       ]);
     });
+
+    // A missing Android INTERNET permission (or a sandbox without the
+    // network-client entitlement) fails every dial with EACCES / EPERM.
+    // Reporting that as an empty list is indistinguishable from "no printers
+    // on this LAN", so the sweep must fail loudly instead.
+    test('an EACCES dial fails the sweep with a permissionDenied '
+        'PrintlyScanException', () async {
+      await expectLater(
+        NetworkPrinterDiscovery.discover(
+          hosts: <String>['192.168.0.5'],
+          connector: (String host, int port, {Duration? timeout}) async {
+            throw const SocketException(
+              'Failed to create socket',
+              osError: OSError('Permission denied', 13),
+            );
+          },
+        ),
+        throwsA(
+          isA<PrintlyScanException>()
+              .having(
+                (PrintlyScanException e) => e.code,
+                'code',
+                PrintlyErrorCode.permissionDenied,
+              )
+              .having(
+                (PrintlyScanException e) => e.message,
+                'message',
+                contains('Permission denied'),
+              ),
+        ),
+      );
+    });
+
+    test('an EPERM dial fails the sweep with a permissionDenied '
+        'PrintlyScanException', () async {
+      await expectLater(
+        NetworkPrinterDiscovery.discover(
+          hosts: <String>['192.168.0.5'],
+          connector: (String host, int port, {Duration? timeout}) async {
+            throw const SocketException(
+              'Connection failed',
+              osError: OSError('Operation not permitted', 1),
+            );
+          },
+        ),
+        throwsA(
+          isA<PrintlyScanException>().having(
+            (PrintlyScanException e) => e.code,
+            'code',
+            PrintlyErrorCode.permissionDenied,
+          ),
+        ),
+      );
+    });
+
+    test(
+      'stops dialing the remaining hosts after a permission error',
+      () async {
+        int dials = 0;
+        await expectLater(
+          NetworkPrinterDiscovery.discover(
+            hosts: <String>[
+              '192.168.0.5',
+              '192.168.0.6',
+              '192.168.0.7',
+              '192.168.0.8',
+            ],
+            concurrency: 1,
+            connector: (String host, int port, {Duration? timeout}) async {
+              dials++;
+              throw const SocketException(
+                'Failed to create socket',
+                osError: OSError('Permission denied', 13),
+              );
+            },
+          ),
+          throwsA(isA<PrintlyScanException>()),
+        );
+        expect(dials, 1);
+      },
+    );
+
+    // Fence: the permission guard must not turn an ordinary closed port into
+    // a failed sweep — a refused host is simply not a printer.
+    test(
+      'a refused dial with an OS error still counts as unreachable',
+      () async {
+        final List<PrintlyDevice> devices =
+            await NetworkPrinterDiscovery.discover(
+              hosts: <String>['192.168.0.5', '192.168.0.6'],
+              connector: (String host, int port, {Duration? timeout}) async {
+                if (host == '192.168.0.6') return _DummySocket();
+                throw const SocketException(
+                  'Connection refused',
+                  osError: OSError('Connection refused', 61),
+                );
+              },
+            );
+
+        expect(devices.map((PrintlyDevice d) => d.address).toList(), <String>[
+          '192.168.0.6:9100',
+        ]);
+      },
+    );
 
     test('validates port, concurrency, probeTimeout, and mutually exclusive '
         'subnet/hosts', () {

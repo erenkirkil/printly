@@ -441,6 +441,10 @@ class Printly {
   ///
   /// Typical sweep time for a 254-host `/24` subnet with the default
   /// [probeTimeout] (`200 ms`) and [concurrency] (`48`) is ~1.2 seconds.
+  ///
+  /// Throws [PrintlyScanException] with [PrintlyErrorCode.permissionDenied]
+  /// when the OS refuses to open sockets (on Android: `INTERNET` is missing
+  /// from the app's manifest) instead of returning an empty list.
   Future<List<PrintlyDevice>> discoverNetworkPrinters({
     String? subnet,
     Iterable<String>? hosts,

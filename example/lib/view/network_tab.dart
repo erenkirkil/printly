@@ -30,10 +30,28 @@ class NetworkTab extends StatelessWidget {
               onChanged: (bool v) => vm.ticketMode = v,
               title: const Text('Ticket mode (notched stock)'),
               subtitle: const Text(
-                'Aligns each job to the ticket notch and cuts on the boundary '
-                'with Custom\'s ESC i. Leave off for continuous roll paper.',
+                'Cuts each job on the ticket notch with Custom\'s ESC i. Leave '
+                'off for continuous roll paper.',
               ),
             ),
+            if (vm.ticketMode) ...<Widget>[
+              Text(
+                'The printer aligns loaded stock by itself. Use "Align '
+                'ticket" only when the paper is left mid-ticket (a print with '
+                'ticket mode off, or the FEED key) — on aligned paper it '
+                'feeds one blank ticket.',
+                style: theme.textTheme.bodySmall,
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: OutlinedButton.icon(
+                  onPressed: vm.canPrint ? vm.alignTicket : null,
+                  icon: const Icon(Icons.vertical_align_top),
+                  label: const Text('Align ticket'),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Text('Test prints', style: theme.textTheme.titleMedium),
             const SizedBox(height: 4),
@@ -85,9 +103,10 @@ class NetworkTab extends StatelessWidget {
                       'same LAN. "Scan LAN" sweeps the local /24 subnet on '
                       'TCP port 9100 with a zero-write handshake (~1.2 s). If '
                       'a saved DHCP IP goes stale after moving the printer or '
-                      'rebooting the router, "Connect" automatically re-scans '
-                      'the LAN and switches to the new IP when a single '
-                      'printer responds.',
+                      'rebooting the router, a failed "Connect" re-scans the '
+                      'LAN and lists what answered under "Discovered" — pick '
+                      'one only after checking it is this counter\'s printer '
+                      '(its self-test page shows the IP).',
                       style: theme.textTheme.bodySmall,
                     ),
                     const SizedBox(height: 8),

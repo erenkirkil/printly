@@ -29,7 +29,9 @@
   unknown commands never print `COMMAND ERROR`. Already-connected network
   printers held by the same `Printly` instance are included without opening a
   second TCP connection, protecting single-socket embedded Ethernet stacks
-  (`lwIP` / W5500).
+  (`lwIP` / W5500). A sweep the OS refuses to run (`EACCES` / `EPERM`, e.g. a
+  missing Android `INTERNET` permission) throws `PrintlyScanException` with
+  `PrintlyErrorCode.permissionDenied` rather than reporting "no printers".
 
 ## 0.4.0 — 2026-10-11
 
